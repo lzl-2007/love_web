@@ -5,7 +5,8 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json());
+// 相册的图片会以压缩后的 data URL 形式存进数据库，请求体需要放宽
+app.use(express.json({ limit: '8mb' }));
 
 // 静态资源目录：用 __dirname 定位，避免 serverless 环境 CWD 不确定
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -40,22 +41,129 @@ function requireDb(req, res, next) {
   next();
 }
 
-// 简单的管理鉴权：请求头带 x-admin-password 且匹配
+// 查看密码：未单独配置 VIEW_PASSWORD 时回退用 ADMIN_PASSWORD
+function viewPassword() {
+  return process.env.VIEW_PASSWORD || process.env.ADMIN_PASSWORD || '';
+}
+
+// 时间安全比较，避免按字符逐位比较被计时攻击
+function safeEqual(a, b) {
+  const s1 = Buffer.from(String(a || ''));
+  const s2 = Buffer.from(String(b || ''));
+  if (s1.length !== s2.length) return false;
+  try {
+    return require('crypto').timingSafeEqual(s1, s2);
+  } catch (e) {
+    return false;
+  }
+}
+
+// 查看鉴权：请求头带 x-view-password；管理员密码也可直接通过
+function requireView(req, res, next) {
+  const given = req.headers['x-view-password'];
+  const vp = viewPassword();
+  const ap = process.env.ADMIN_PASSWORD;
+  if (given && ((vp && safeEqual(given, vp)) || (ap && safeEqual(given, ap)))) {
+    return next();
+  }
+  res.status(401).json({ error: 'unauthorized', message: '查看密码错误' });
+}
+
+// 管理鉴权：请求头带 x-admin-password 且匹配
 function requireAdmin(req, res, next) {
-  if (process.env.ADMIN_PASSWORD && req.headers['x-admin-password'] === process.env.ADMIN_PASSWORD) {
+  const given = req.headers['x-admin-password'];
+  const ap = process.env.ADMIN_PASSWORD;
+  if (given && ap && safeEqual(given, ap)) {
     return next();
   }
   res.status(401).json({ error: 'unauthorized' });
 }
 
-// 查询全部（展示页）
-app.get('/api/items', requireDb, async (req, res) => {
+// 校验查看密码（前端登录用）
+app.post('/api/login', (req, res) => {
+  const { password } = req.body || {};
+  const vp = viewPassword();
+  const ap = process.env.ADMIN_PASSWORD;
+  const ok = password && ((vp && safeEqual(password, vp)) || (ap && safeEqual(password, ap)));
+  if (!ok) return res.status(401).json({ error: 'unauthorized', message: '密码错误' });
+  res.json({ ok: true });
+});
+
+// 查询全部（展示页）—— 需要查看密码
+// ?light=1 只返回 id/title/created_at（首页统计用，避免把相册图片全下下来）
+app.get('/api/items', requireView, requireDb, async (req, res) => {
+  const light = req.query.light === '1';
   const { data, error } = await supabase
     .from('items')
-    .select('*')
+    .select(light ? 'id,title,created_at' : '*')
     .order('id', { ascending: false });
   if (error) return res.status(500).json(error);
   res.json(data);
+});
+
+/* ============================================================
+   分区内容的「添加」接口
+   —— 数据仍是同一张 items 表，用 title 前缀标记属于哪个分区：
+        [相片] <说明标签>        content = 图片（每行一个）
+        [日记] <YYYY-MM-DD>      content = 话语
+        [时光轴] <YYYY-MM-DD HH:mm>  content = 事件
+   —— 只做「添加式修改」：同一个时间点/同一个标签 → 追加到已有记录，
+      不新建、也不提供删除。
+   ============================================================ */
+const MARKERS = { album: '相片', diary: '日记', timeline: '时光轴' };
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+
+app.post('/api/entries', requireAdmin, requireDb, async (req, res) => {
+  const { category, label, content, when } = req.body || {};
+
+  if (!MARKERS[category]) {
+    return res.status(400).json({ error: 'bad category', message: '分区类型不对' });
+  }
+  const body = String(content || '').trim();
+  if (!body) {
+    return res.status(400).json({ error: 'content required', message: '内容不能为空' });
+  }
+  if (body.length > 4 * 1024 * 1024) {
+    return res.status(413).json({ error: 'too large', message: '内容太大了，请少选几张图片' });
+  }
+
+  let title;
+  if (category === 'album') {
+    title = `[相片] ${String(label || '').trim() || '照片'}`;
+  } else if (category === 'diary') {
+    const d = String(when || '').trim();
+    if (!DATE_RE.test(d)) return res.status(400).json({ error: 'bad date', message: '请选择日期（YYYY-MM-DD）' });
+    title = `[日记] ${d}`;
+  } else {
+    const t = String(when || '').trim();
+    if (!DATETIME_RE.test(t)) return res.status(400).json({ error: 'bad time', message: '请选择时间点（YYYY-MM-DD HH:mm）' });
+    title = `[时光轴] ${t}`;
+  }
+
+  // 同一个时间点（或同一个相册标签）已存在 → 追加，而不是新建
+  const { data: existRows, error: findErr } = await supabase
+    .from('items')
+    .select('id,content')
+    .eq('title', title)
+    .limit(1);
+  if (findErr) return res.status(500).json(findErr);
+
+  if (existRows && existRows.length) {
+    const row = existRows[0];
+    const merged = [String(row.content || '').trim(), body].filter(Boolean).join('\n');
+    const { error: upErr } = await supabase.from('items').update({ content: merged }).eq('id', row.id);
+    if (upErr) return res.status(500).json(upErr);
+    return res.json({ ok: true, action: 'appended', id: row.id, title });
+  }
+
+  const { data, error } = await supabase
+    .from('items')
+    .insert({ title, content: body })
+    .select()
+    .single();
+  if (error) return res.status(500).json(error);
+  res.json({ ok: true, action: 'created', id: data.id, title });
 });
 
 // 新增（需管理密码）

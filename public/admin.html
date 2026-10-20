@@ -3,30 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>内容管理</title>
-  <style>
-    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    input, textarea { width: 100%; box-sizing: border-box; margin: .3rem 0; padding: .5rem; }
-    .row { border-bottom: 1px solid #eee; padding: .8rem 0; display: flex; justify-content: space-between; align-items: center; }
-    button { cursor: pointer; padding: .4rem .8rem; }
-    .err { color: #c0392b; }
-  </style>
+  <title>内容管理 · 我们的小天地</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <h1>内容管理</h1>
-  <p>管理密码：<input id="pwd" type="password" placeholder="输入管理密码" style="width:200px"></p>
-  <h3>新增</h3>
-  <input id="title" placeholder="标题">
-  <textarea id="content" placeholder="内容" rows="3"></textarea>
-  <button onclick="add()">添加</button>
+  <div class="wrap">
+    <div class="sec-head">
+      <a class="back" href="/">← 返回首页</a>
+      <h1>⚙️ 内容管理</h1>
+      <div class="top-actions"><span class="count" id="count"></span></div>
+    </div>
 
-  <h3>现有内容</h3>
-  <div id="list"></div>
+    <div class="panel">
+      <h3>管理密码</h3>
+      <input id="pwd" class="form-input" type="password" placeholder="输入管理密码（增删改需要）" autocomplete="off">
+    </div>
+
+    <div class="panel">
+      <h3>新增一条</h3>
+      <input id="title" class="form-input" placeholder="标题，比如：2026 秋天的公园">
+      <textarea id="content" class="form-input" placeholder="内容。想放进「相片回忆」的话，直接把图片链接粘贴在这里就行～"></textarea>
+      <button class="btn-solid" onclick="add()">添加</button>
+    </div>
+
+    <h3 style="margin:1.5rem 0 .8rem; font-size:1rem">现有内容</h3>
+    <div id="list"></div>
+  </div>
 
   <script>
     const pwd = () => document.getElementById('pwd').value;
-    const H = () => ({ 'Content-Type': 'application/json', 'x-admin-password': pwd() });
-    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    // 管理密码同时当查看密码用（读取 + 增删改都能过）
+    const H = () => ({
+      'Content-Type': 'application/json',
+      'x-admin-password': pwd(),
+      'x-view-password': pwd()
+    });
+
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    // 分区内容用 [相片]/[日记]/[时光轴] 前缀做标记，这里把标记剥掉再展示
+    const CAT = { '相片': '相册', '日记': '日记', '时光轴': '时光轴' };
+    function labelOf(title) {
+      const m = /^\[(相片|日记|时光轴)\]\s*(.*)$/.exec(title || '');
+      if (!m) return { cat: '', text: title || '（无标题）' };
+      return { cat: CAT[m[1]], text: m[2] || '（无内容）' };
+    }
 
     // 统一解析响应：把后端返回的错误信息提取出来
     async function parse(r) {
@@ -42,21 +63,30 @@
     async function load() {
       const el = document.getElementById('list');
       try {
-        const items = await parse(await fetch('/api/items'));
+        const items = await parse(await fetch('/api/items', { headers: H() }));
         if (!Array.isArray(items)) throw new Error('返回数据格式异常');
+        document.getElementById('count').textContent = items.length ? items.length + ' 条' : '';
         el.innerHTML = items.length
-          ? items.map(i => `<div class="row"><span>${esc(i.title)}</span><button onclick="del(${i.id})">删除</button></div>`).join('')
-          : '暂无内容';
+          ? items.map(i => {
+              const L = labelOf(i.title);
+              return `<div class="admin-row">
+                <span class="t">${esc(L.text)}${L.cat ? ` <em class="cat">${esc(L.cat)}</em>` : ''}</span>
+                <button class="del" onclick="del(${i.id})">删除</button>
+              </div>`;
+            }).join('')
+          : '<div class="empty"><span class="big">🌱</span><p>还没有内容</p></div>';
       } catch (e) {
-        el.innerHTML = `<div class="err">加载失败：${esc(e.message)}</div>`;
+        el.innerHTML = `<div class="empty"><p class="err">加载失败：${esc(e.message)}</p></div>`;
       }
     }
 
     async function add() {
+      const title = document.getElementById('title').value;
+      if (!title.trim()) return alert('标题不能为空');
       try {
         await parse(await fetch('/api/items', {
           method: 'POST', headers: H(),
-          body: JSON.stringify({ title: document.getElementById('title').value, content: document.getElementById('content').value })
+          body: JSON.stringify({ title, content: document.getElementById('content').value })
         }));
       } catch (e) {
         return alert('失败：' + e.message);

@@ -3,38 +3,163 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>内容展示</title>
-  <style>
-    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    .item { border-bottom: 1px solid #eee; padding: 1rem 0; }
-    .item h3 { margin: 0 0 .5rem; }
-    .err { color: #c0392b; }
-  </style>
+  <title>我们的小天地</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-  <h1>内容列表</h1>
-  <div id="list">加载中…</div>
-  <script>
-    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+<body class="locked">
 
-    async function load() {
-      const el = document.getElementById('list');
+  <!-- ================= 锁定状态：整屏背景图 + 密码门 ================= -->
+  <div class="lock" id="lock">
+    <form class="lock-card" id="lockCard" autocomplete="off">
+      <div class="lock-lock">🔒</div>
+      <h1>欢迎回来</h1>
+      <p>这里是属于我们的小花园<br>请输入查看密码</p>
+      <input id="vpwd" type="password" placeholder="查看密码" autocomplete="current-password">
+      <button class="btn-primary" type="submit">进 入</button>
+      <div class="lock-err" id="gerr"></div>
+      <div class="lock-foot">L O V E · W E B</div>
+    </form>
+  </div>
+
+  <!-- ================= 解锁后：首页 + 三个分区 ================= -->
+  <div class="wrap" id="home" style="display:none">
+    <div class="hero">
+      <div class="hero-top">
+        <button class="btn-ghost" onclick="logout()">退出</button>
+      </div>
+      <div class="hero-inner">
+        <h1>我们的小天地</h1>
+        <p>把一起走过的日子，都收在这里 🌿</p>
+      </div>
+    </div>
+
+    <div class="sections">
+      <a class="card c-album" href="/section?type=album">
+        <div class="icon">📷</div>
+        <div class="card-body">
+          <h3>相片回忆<span class="pill" id="cnt-album"></span></h3>
+          <p>一张张照片，都是当时的风和阳光。</p>
+          <span class="go">进去看看</span>
+        </div>
+      </a>
+
+      <a class="card c-diary" href="/section?type=diary">
+        <div class="icon">📖</div>
+        <div class="card-body">
+          <h3>心情日记<span class="pill" id="cnt-diary"></span></h3>
+          <p>随手记下的小心情，慢慢攒成一本书。</p>
+          <span class="go">进去看看</span>
+        </div>
+      </a>
+
+      <a class="card c-time" href="/section?type=timeline">
+        <div class="icon">⏳</div>
+        <div class="card-body">
+          <h3>时光轴<span class="pill" id="cnt-time"></span></h3>
+          <p>按时间排好顺序，一眼看完走过的路。</p>
+          <span class="go">进去看看</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <script>
+    const KEY = 'view_pwd';
+    const $ = id => document.getElementById(id);
+
+    // ---------- 锁定 / 解锁 ----------
+    function showLock(msg) {
+      document.body.classList.add('locked');
+      $('home').style.display = 'none';
+      $('lock').style.display = 'grid';
+      $('gerr').textContent = msg || '';
+      const input = $('vpwd');
+      if (input) input.focus();
+    }
+
+    function showHome() {
+      document.body.classList.remove('locked');
+      $('lock').style.display = 'none';
+      $('home').style.display = '';
+      loadCounts();
+    }
+
+    async function unlock(e) {
+      if (e) e.preventDefault();
+      const pw = $('vpwd').value;
+      if (!pw) return showLock('请输入密码');
       try {
-        const res = await fetch('/api/items');
-        const data = await res.json();
-        // 接口返回错误对象（非数组）时，明确提示，不再静默显示"暂无内容"
-        if (!res.ok || !Array.isArray(data)) {
-          const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+        const r = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw })
+        });
+        if (!r.ok) {
+          let msg = r.status === 401 ? '密码错误，再试一次' : ('请求失败 HTTP ' + r.status);
+          try { const d = await r.json(); if (d && d.message) msg = d.message; } catch (err) {}
           throw new Error(msg);
         }
-        el.innerHTML = data.length
-          ? data.map(i => `<div class="item"><h3>${esc(i.title)}</h3><p>${esc(i.content || '')}</p></div>`).join('')
-          : '暂无内容';
-      } catch (e) {
-        el.innerHTML = `<div class="err">加载失败：${esc(e.message)}</div>`;
+        sessionStorage.setItem(KEY, pw);
+        $('vpwd').value = '';
+        showHome();
+      } catch (err) {
+        showLock(err.message);
       }
     }
-    load();
+
+    function logout() {
+      sessionStorage.removeItem(KEY);
+      location.reload();
+    }
+
+    // ---------- 取数据（需要查看密码） ----------
+    // light = true 时只取 id/标题，不把相册图片全下下来
+    async function getItems(light) {
+      const res = await fetch('/api/items' + (light ? '?light=1' : ''), {
+        headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
+      });
+      if (res.status === 401) { sessionStorage.removeItem(KEY); showLock('登录已失效，请重新输入密码'); return null; }
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data)) {
+        const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+        throw new Error(msg);
+      }
+      return data;
+    }
+    // 从内容里挑出图片链接
+    function imagesOf(text) {
+      return String(text || '').match(/https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?/gi) || [];
+    }
+
+    // 在卡片上显示各分区条数（0 就不显示）
+    async function loadCounts() {
+      try {
+        const items = await getItems(true);
+        if (!items) return;
+        const isAlbum = i => /^\[相片\]/.test(i.title || '');
+        const isDiary = i => /^\[日记\]/.test(i.title || '');
+        const isTime  = i => /^\[时光轴\]/.test(i.title || '');
+        const legacy  = i => !/^\[(相片|日记|时光轴)\]/.test(i.title || '');   // 以前手动加的内容
+        const n = { album: 0, diary: 0, timeline: 0 };
+        items.forEach(i => {
+          if (isAlbum(i)) n.album++;
+          else if (isDiary(i)) { n.diary++; }
+          else if (isTime(i)) { n.timeline++; }
+          else if (legacy(i)) { n.diary++; n.timeline++; }
+        });
+        const put = (id, v) => { $(id).textContent = v ? v : ''; };
+        put('cnt-album', n.album);
+        put('cnt-diary', n.diary);
+        put('cnt-time', n.timeline);
+      } catch (err) {
+        console.warn('统计失败：', err.message);
+      }
+    }
+
+    // ---------- 初始化 ----------
+    $('lockCard').addEventListener('submit', unlock);
+    if (sessionStorage.getItem(KEY)) showHome();
+    else showLock('');
   </script>
 </body>
 </html>

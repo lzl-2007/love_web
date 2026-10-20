@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>分区 · 我们的小天地</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="sec-head">
+      <a class="back" href="/">← 返回</a>
+      <h1 id="title">加载中…</h1>
+      <div class="top-actions">
+        <span class="count" id="count"></span>
+        <button class="btn-plain" id="addBtn" onclick="toggleForm()">＋ 添加</button>
+      </div>
+    </div>
+
+    <!-- ============ 添加面板（三种分区各自的表单） ============ -->
+    <div class="panel addpanel" id="addPanel" hidden>
+      <h3 id="formTitle">添加</h3>
+      <div id="formFields"></div>
+
+      <label class="lbl">管理密码</label>
+      <input id="adminPwd" class="form-input" type="password" placeholder="添加内容需要管理密码（本次会话只需输一次）" autocomplete="off">
+
+      <button class="btn-solid" id="submitBtn" onclick="submitEntry()">保存</button>
+      <div class="hint" id="formHint"></div>
+    </div>
+
+    <div id="body">
+      <div class="empty"><span class="big">⏳</span><p>正在打开…</p></div>
+    </div>
+  </div>
+
+  <!-- 点图片放大 -->
+  <div class="lightbox" id="lightbox"><img id="lightboxImg" alt=""></div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const KEY = 'view_pwd';
+    const AKEY = 'admin_pwd';
+    const $ = id => document.getElementById(id);
+
+    /* ---------------- 分区配置 ---------------- */
+    const SECTIONS = {
+      album:    { title: '📷 相片回忆', tip: '选好照片 + 写个说明标签，就会出现在这里' },
+      diary:    { title: '📖 心情日记', tip: '同一个日期再添加，会接在那天的后面' },
+      timeline: { title: '⏳ 时光轴',   tip: '同一个时间点再添加，会并入同一条' }
+    };
+
+    const params = new URLSearchParams(location.search);
+    const type = SECTIONS[params.get('type')] ? params.get('type') : 'diary';
+    const conf = SECTIONS[type];
+    document.title = conf.title + ' · 我们的小天地';
+    $('title').textContent = conf.title;
+
+    /* ---------------- 小工具 ---------------- */
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    const MARK = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
+    const IMG_RE = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
+
+    // 取出图片（链接 / data URL）和剩下的正文
+    function splitContent(content) {
+      const raw = String(content == null ? '' : content);
+      const images = raw.match(IMG_RE) || [];
+      let text = raw;
+      images.forEach(u => { text = text.split(u).join(''); });
+      text = text
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{2,}/g, '\n')
+        .replace(/^[\s,，、;；]+/, '')
+        .replace(/[\s,，、;；]+$/, '')
+        .trim();
+      return { images, text };
+    }
+
+    // 解析一条记录属于哪个分区（title 前缀标记）
+    function parseItem(i) {
+      const m = MARK.exec(i.title || '');
+      const c = splitContent(i.content);
+      return {
+        id: i.id,
+        category: m ? ({ '相片': 'album', '日记': 'diary', '时光轴': 'timeline' })[m[1]] : null,
+        stamp: m && m[1] !== '相片' ? m[2] : '',
+        label: m && m[1] === '相片' ? (m[2] || '照片') : '',
+        title: i.title,
+        images: c.images,
+        text: c.text,
+        created_at: i.created_at
+      };
+    }
+
+    function fmtDate(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      if (isNaN(d)) return '';
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    const todayStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+    const nowStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+    // 排序用的时间戳字符串：优先用记录里的时间点，否则用创建时间
+    const sortKey = it => it.stamp || fmtDate(it.created_at);
+
+    function toast(msg) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.classList.add('on');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => t.classList.remove('on'), 2600);
+    }
+    function emptyBox(main, tip) {
+      return `<div class="empty"><span class="big">🌱</span><p>${esc(main)}</p><p class="tip">${esc(tip || conf.tip)}</p></div>`;
+    }
+
+    /* ---------------- 取数据 ---------------- */
+    async function getItems() {
+      const res = await fetch('/api/items', {
+        headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
+      });
+      if (res.status === 401) { sessionStorage.removeItem(KEY); location.replace('/'); return null; }
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data)) {
+        const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+        throw new Error(msg);
+      }
+      return data.map(parseItem);
+    }
+
+    /* ---------------- 三种渲染 ---------------- */
+    function renderAlbum(items) {
+      const photos = [];
+      items.forEach(i => {
+        if (i.category && i.category !== 'album') return;          // 别的分区的不管
+        if (!i.images.length) return;                              // 没有图片的不进相册
+        i.images.forEach(u => photos.push({ url: u, label: i.label || i.title || '照片' }));
+      });
+      $('count').textContent = photos.length ? photos.length + ' 张' : '';
+      if (!photos.length) return emptyBox('相册还是空的', conf.tip);
+      return `<div class="photos">` + photos.map(p => `
+        <figure class="photo">
+          <img src="${esc(p.url)}" alt="${esc(p.label)}" loading="lazy" onclick="zoom('${esc(p.url).replace(/'/g, "\\'")}')">
+          <figcaption>${esc(p.label)}</figcaption>
+        </figure>`).join('') + `</div>`;
+    }
+
+    function renderDiary(items) {
+      const list = items.filter(i => i.category === 'diary' || i.category === null)
+                        .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+      $('count').textContent = list.length ? list.length + ' 篇' : '';
+      if (!list.length) return emptyBox('还没有写下什么', conf.tip);
+      return `<div class="diary">` + list.map(i => {
+        const head = i.stamp || fmtDate(i.created_at) || '未标日期';
+        const sub = (i.category === null && i.title) ? i.title : '';   // 以前手动加的内容仍显示标题
+        return `<div class="note">
+          <div class="dot-date">${esc(head)}</div>
+          ${sub ? `<h3>${esc(sub)}</h3>` : ''}
+          ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
+          ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" onclick="zoom('${esc(u).replace(/'/g, "\\'")}')"></div>`).join('')}
+        </div>`;
+      }).join('') + `</div>`;
+    }
+
+    function renderTimeline(items) {
+      const list = items.filter(i => i.category === 'timeline' || i.category === null)
+                        .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+      $('count').textContent = list.length ? list.length + ' 条' : '';
+      if (!list.length) return emptyBox('时间轴还是空的', conf.tip);
+      return `<div class="timeline">` + list.map(i => {
+        const head = i.stamp || fmtDate(i.created_at) || ('#' + i.id);
+        const sub = (i.category === null && i.title) ? i.title : '';
+        return `<div class="tl-item">
+          <div class="dot-date">${esc(head)}</div>
+          ${sub ? `<h3>${esc(sub)}</h3>` : ''}
+          ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
+          ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" onclick="zoom('${esc(u).replace(/'/g, "\\'")}')"></div>`).join('')}
+        </div>`;
+      }).join('') + `</div>`;
+    }
+
+    /* ---------------- 图片放大 ---------------- */
+    function zoom(url) {
+      $('lightboxImg').src = url;
+      $('lightbox').classList.add('on');
+    }
+    $('lightbox').addEventListener('click', () => {
+      $('lightbox').classList.remove('on');
+      $('lightboxImg').src = '';
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').classList.remove('on'); });
+
+    /* ================= 添加功能 ================= */
+    function formHTML() {
+      if (type === 'album') {
+        return `
+          <label class="lbl">选择图片（可多选，会自动压缩）</label>
+          <label class="file-box">📷 点这里选照片<input id="f-files" type="file" accept="image/*" multiple></label>
+          <div class="thumbs" id="f-previews"></div>
+          <label class="lbl">或者粘贴图片链接（每行一个，可留空）</label>
+          <textarea id="f-links" class="form-input" placeholder="https://...jpg"></textarea>
+          <label class="lbl">说明标签</label>
+          <input id="f-label" class="form-input" placeholder="比如：2026 秋天的公园">`;
+      }
+      if (type === 'diary') {
+        return `
+          <label class="lbl">日期</label>
+          <input id="f-when" class="form-input" type="date" value="${todayStr()}">
+          <label class="lbl">想说的话</label>
+          <textarea id="f-content" class="form-input" placeholder="今天想说点什么…"></textarea>`;
+      }
+      return `
+        <label class="lbl">时间点</label>
+        <input id="f-when" class="form-input" type="datetime-local" value="${nowStr()}">
+        <label class="lbl">发生了什么</label>
+        <textarea id="f-content" class="form-input" placeholder="记下这个时间点的事…"></textarea>`;
+    }
+    $('formFields').innerHTML = formHTML();
+    $('formTitle').textContent = '添加' + conf.title.replace(/^\S+\s/, '');
+    $('adminPwd').value = sessionStorage.getItem(AKEY) || '';
+
+    if (type === 'album') {
+      $('f-files').addEventListener('change', async e => {
+        const files = Array.from(e.target.files || []);
+        if (!files.length) return;
+        $('formHint').textContent = `正在压缩 ${files.length} 张图片…`;
+        const out = [];
+        for (const f of files) {
+          try { out.push(await compress(f)); } catch (err) { console.warn('压缩失败', err); }
+        }
+        chosen = out;
+        $('f-previews').innerHTML = out.map(u => `<img src="${u}" alt="">`).join('');
+        const kb = Math.round(out.join('').length / 1024);
+        $('formHint').textContent = `已选择 ${out.length} 张，压缩后约 ${kb} KB`;
+      });
+    }
+
+    function toggleForm() {
+      const p = $('addPanel');
+      p.hidden = !p.hidden;
+      if (!p.hidden) {
+        $('addBtn').textContent = '收起';
+        $('formHint').textContent = '';
+        p.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else {
+        $('addBtn').textContent = '＋ 添加';
+      }
+    }
+
+    // 本地图片压缩成 JPEG data URL（长边最多 1280px）
+    let chosen = [];
+    function compress(file, maxSide = 1280, quality = 0.82) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = reject;
+        fr.onload = () => {
+          const img = new Image();
+          img.onerror = reject;
+          img.onload = () => {
+            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const cv = document.createElement('canvas');
+            cv.width = w; cv.height = h;
+            cv.getContext('2d').drawImage(img, 0, 0, w, h);
+            let q = quality, out = cv.toDataURL('image/jpeg', q);
+            while (out.length > 600 * 1024 && q > 0.4) { q -= 0.12; out = cv.toDataURL('image/jpeg', q); }
+            resolve(out);
+          };
+          img.src = fr.result;
+        };
+        fr.readAsDataURL(file);
+      });
+    }
+
+    async function submitEntry(ev) {
+      if (ev) ev.preventDefault();
+      const hint = $('formHint');
+      const pwd = $('adminPwd').value;
+      if (!pwd) { hint.className = 'hint err'; hint.textContent = '请先填管理密码'; return; }
+
+      let payload;
+      if (type === 'album') {
+        const links = ($('f-links').value || '').split(/[\s\n]+/).map(s => s.trim()).filter(Boolean);
+        const all = chosen.concat(links);
+        if (!all.length) { hint.className = 'hint err'; hint.textContent = '请选一张照片，或粘贴图片链接'; return; }
+        payload = { category: 'album', label: $('f-label').value, content: all.join('\n') };
+      } else {
+        const when = ($('f-when').value || '').replace('T', ' ');
+        if (!when) { hint.className = 'hint err'; hint.textContent = '请选择时间'; return; }
+        payload = { category: type, when: when, content: $('f-content').value };
+      }
+      if (payload.content.length > 3.4 * 1024 * 1024) {
+        hint.className = 'hint err';
+        hint.textContent = '这次内容太大了（超过 3.4MB），请少选几张图片分几次添加';
+        return;
+      }
+
+      $('submitBtn').disabled = true;
+      hint.className = 'hint';
+      hint.textContent = '正在保存…';
+      try {
+        const r = await fetch('/api/entries', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-admin-password': pwd,
+            'x-view-password': sessionStorage.getItem(KEY) || ''
+          },
+          body: JSON.stringify(payload)
+        });
+        let data = null;
+        try { data = await r.json(); } catch (e) {}
+        if (!r.ok) {
+          const msg = r.status === 401 ? '管理密码不对' : ((data && (data.message || data.error)) || ('HTTP ' + r.status));
+          throw new Error(msg);
+        }
+        sessionStorage.setItem(AKEY, pwd);
+        toast(data.action === 'appended' ? '已并入同一个时间点 ✨' : '添加成功 ✨');
+        // 清空表单（不同分区的字段不一样，逐个判断）
+        if (type === 'album') {
+          chosen = [];
+          if ($('f-previews')) $('f-previews').innerHTML = '';
+          if ($('f-files')) $('f-files').value = '';
+          if ($('f-links')) $('f-links').value = '';
+          if ($('f-label')) $('f-label').value = '';
+        } else {
+          if ($('f-content')) $('f-content').value = '';
+          if ($('f-when')) $('f-when').value = (type === 'diary' ? todayStr() : nowStr());
+        }
+        hint.textContent = '';
+        await refresh();
+      } catch (err) {
+        hint.className = 'hint err';
+        hint.textContent = '失败：' + err.message;
+      } finally {
+        $('submitBtn').disabled = false;
+      }
+    }
+
+    /* ---------------- 渲染整页 ---------------- */
+    async function refresh() {
+      const items = await getItems();
+      if (!items) return;
+      $('body').innerHTML = type === 'album' ? renderAlbum(items)
+                          : type === 'timeline' ? renderTimeline(items)
+                          : renderDiary(items);
+    }
+
+    (async function init() {
+      if (!sessionStorage.getItem(KEY)) return location.replace('/');
+      try {
+        await refresh();
+      } catch (err) {
+        $('body').innerHTML = `<div class="empty"><span class="big">😢</span><p class="err">加载失败：${esc(err.message)}</p></div>`;
+      }
+    })();
+  </script>
+</body>
+</html>
