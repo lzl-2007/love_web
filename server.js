@@ -63,5 +63,11 @@ app.put('/api/items/:id', requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log('listening on ' + port));
+// 仅在本地开发环境监听端口，Vercel 环境下会自动处理
+if (process.env.NODE_ENV !== 'production') {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => console.log('listening on ' + port));
+}
+
+// 关键：导出 app 供 Vercel 使用
+module.exports = app;
