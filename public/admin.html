@@ -9,6 +9,7 @@
     input, textarea { width: 100%; box-sizing: border-box; margin: .3rem 0; padding: .5rem; }
     .row { border-bottom: 1px solid #eee; padding: .8rem 0; display: flex; justify-content: space-between; align-items: center; }
     button { cursor: pointer; padding: .4rem .8rem; }
+    .err { color: #c0392b; }
   </style>
 </head>
 <body>
@@ -25,31 +26,56 @@
   <script>
     const pwd = () => document.getElementById('pwd').value;
     const H = () => ({ 'Content-Type': 'application/json', 'x-admin-password': pwd() });
+    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    // 统一解析响应：把后端返回的错误信息提取出来
+    async function parse(r) {
+      let data = null;
+      try { data = await r.json(); } catch (e) { /* 非 JSON */ }
+      if (!r.ok) {
+        const msg = (data && (data.message || data.error)) || ('HTTP ' + r.status);
+        throw new Error(r.status === 401 ? '密码错误' : msg);
+      }
+      return data;
+    }
 
     async function load() {
-      const res = await fetch('/api/items');
-      const items = await res.json();
-      document.getElementById('list').innerHTML = items.length
-        ? items.map(i => `<div class="row"><span>${esc(i.title)}</span><button onclick="del(${i.id})">删除</button></div>`).join('')
-        : '暂无内容';
+      const el = document.getElementById('list');
+      try {
+        const items = await parse(await fetch('/api/items'));
+        if (!Array.isArray(items)) throw new Error('返回数据格式异常');
+        el.innerHTML = items.length
+          ? items.map(i => `<div class="row"><span>${esc(i.title)}</span><button onclick="del(${i.id})">删除</button></div>`).join('')
+          : '暂无内容';
+      } catch (e) {
+        el.innerHTML = `<div class="err">加载失败：${esc(e.message)}</div>`;
+      }
     }
+
     async function add() {
-      const r = await fetch('/api/items', {
-        method: 'POST', headers: H(),
-        body: JSON.stringify({ title: document.getElementById('title').value, content: document.getElementById('content').value })
-      });
-      if (!r.ok) return alert('失败：' + (r.status === 401 ? '密码错误' : r.status));
+      try {
+        await parse(await fetch('/api/items', {
+          method: 'POST', headers: H(),
+          body: JSON.stringify({ title: document.getElementById('title').value, content: document.getElementById('content').value })
+        }));
+      } catch (e) {
+        return alert('失败：' + e.message);
+      }
       document.getElementById('title').value = '';
       document.getElementById('content').value = '';
       load();
     }
+
     async function del(id) {
       if (!confirm('确定删除？')) return;
-      const r = await fetch('/api/items/' + id, { method: 'DELETE', headers: H() });
-      if (!r.ok) return alert('失败：' + (r.status === 401 ? '密码错误' : r.status));
+      try {
+        await parse(await fetch('/api/items/' + id, { method: 'DELETE', headers: H() }));
+      } catch (e) {
+        return alert('失败：' + e.message);
+      }
       load();
     }
-    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
     load();
   </script>
 </body>

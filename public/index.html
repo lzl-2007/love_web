@@ -8,20 +8,32 @@
     body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
     .item { border-bottom: 1px solid #eee; padding: 1rem 0; }
     .item h3 { margin: 0 0 .5rem; }
+    .err { color: #c0392b; }
   </style>
 </head>
 <body>
   <h1>内容列表</h1>
   <div id="list">加载中…</div>
   <script>
-    async function load() {
-      const res = await fetch('/api/items');
-      const items = await res.json();
-      document.getElementById('list').innerHTML = items.length
-        ? items.map(i => `<div class="item"><h3>${esc(i.title)}</h3><p>${esc(i.content || '')}</p></div>`).join('')
-        : '暂无内容';
-    }
     function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    async function load() {
+      const el = document.getElementById('list');
+      try {
+        const res = await fetch('/api/items');
+        const data = await res.json();
+        // 接口返回错误对象（非数组）时，明确提示，不再静默显示"暂无内容"
+        if (!res.ok || !Array.isArray(data)) {
+          const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+          throw new Error(msg);
+        }
+        el.innerHTML = data.length
+          ? data.map(i => `<div class="item"><h3>${esc(i.title)}</h3><p>${esc(i.content || '')}</p></div>`).join('')
+          : '暂无内容';
+      } catch (e) {
+        el.innerHTML = `<div class="err">加载失败：${esc(e.message)}</div>`;
+      }
+    }
     load();
   </script>
 </body>
