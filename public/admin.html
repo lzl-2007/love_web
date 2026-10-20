@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>内容管理</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    input, textarea { width: 100%; box-sizing: border-box; margin: .3rem 0; padding: .5rem; }
+    .row { border-bottom: 1px solid #eee; padding: .8rem 0; display: flex; justify-content: space-between; align-items: center; }
+    button { cursor: pointer; padding: .4rem .8rem; }
+  </style>
+</head>
+<body>
+  <h1>内容管理</h1>
+  <p>管理密码：<input id="pwd" type="password" placeholder="输入管理密码" style="width:200px"></p>
+  <h3>新增</h3>
+  <input id="title" placeholder="标题">
+  <textarea id="content" placeholder="内容" rows="3"></textarea>
+  <button onclick="add()">添加</button>
+
+  <h3>现有内容</h3>
+  <div id="list"></div>
+
+  <script>
+    const pwd = () => document.getElementById('pwd').value;
+    const H = () => ({ 'Content-Type': 'application/json', 'x-admin-password': pwd() });
+
+    async function load() {
+      const res = await fetch('/api/items');
+      const items = await res.json();
+      document.getElementById('list').innerHTML = items.length
+        ? items.map(i => `<div class="row"><span>${esc(i.title)}</span><button onclick="del(${i.id})">删除</button></div>`).join('')
+        : '暂无内容';
+    }
+    async function add() {
+      const r = await fetch('/api/items', {
+        method: 'POST', headers: H(),
+        body: JSON.stringify({ title: document.getElementById('title').value, content: document.getElementById('content').value })
+      });
+      if (!r.ok) return alert('失败：' + (r.status === 401 ? '密码错误' : r.status));
+      document.getElementById('title').value = '';
+      document.getElementById('content').value = '';
+      load();
+    }
+    async function del(id) {
+      if (!confirm('确定删除？')) return;
+      const r = await fetch('/api/items/' + id, { method: 'DELETE', headers: H() });
+      if (!r.ok) return alert('失败：' + (r.status === 401 ? '密码错误' : r.status));
+      load();
+    }
+    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    load();
+  </script>
+</body>
+</html>
