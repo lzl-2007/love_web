@@ -89,16 +89,42 @@ app.post('/api/login', (req, res) => {
   res.json({ ok: true });
 });
 
-// 查询全部（展示页）—— 需要查看密码
-// ?light=1 只返回 id/title/created_at（首页统计用，避免把相册图片全下下来）
+// 查询（展示页）—— 需要查看密码。为了省流量，只看哪一块就只取哪一块的数据
+//   ?light=1         只返回 id/title/created_at（首页统计、相册分块骨架用，不带图片）
+//   ?type=album      只要相册（title 以 [相片] 开头，带图片）
+//   ?type=diary      只要日记（[日记] 开头 + 早期没有 [分区] 标记的记录）
+//   ?type=timeline   只要时光轴（[时光轴] 开头 + 早期没有 [分区] 标记的记录）
+//   ?ids=12,34      只要这几个 id（相册分块懒加载用）
 app.get('/api/items', requireView, requireDb, async (req, res) => {
+  const { type, ids } = req.query;
   const light = req.query.light === '1';
-  const { data, error } = await supabase
-    .from('items')
-    .select(light ? 'id,title,created_at' : '*')
-    .order('id', { ascending: false });
-  if (error) return res.status(500).json(error);
-  res.json(data);
+  const sel = light ? 'id,title,created_at' : '*';
+  const PREFIX = { album: '[相片]', diary: '[日记]', timeline: '[时光轴]' }[type];
+  const idList = String(ids || '').split(',').map(s => Number(s.trim()))
+    .filter(n => Number.isInteger(n) && n > 0);
+
+  const run = async q => {
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  };
+
+  try {
+    let rows;
+    if (idList.length) {
+      rows = await run(supabase.from('items').select(sel).in('id', idList));
+    } else if (PREFIX) {
+      rows = await run(supabase.from('items').select(sel).like('title', PREFIX + '%'));
+      // 早期手动加的内容没有 [分区] 标记，相册 / 日记 / 时光轴里都照旧看得到
+      rows = rows.concat(await run(supabase.from('items').select(sel).not('title', 'like', '[%')));
+    } else {
+      rows = await run(supabase.from('items').select(sel));
+    }
+    rows.sort((a, b) => b.id - a.id);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || String(e) });
+  }
 });
 
 /* ============================================================

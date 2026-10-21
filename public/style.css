@@ -588,6 +588,33 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
 }
 .group-photos .shot:hover img { transform: scale(1.07); }
 
+  /* 相册照片的占位骨架（照片懒加载：滚到这一块才取图） */
+  .group-photos.ph-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 168px;          /* 占住一张照片的高度，照片到位时不会跳动 */
+    width: 100%;
+    box-sizing: border-box;
+    padding: 1.15rem 1.1rem;
+    border: 1px dashed rgba(47, 93, 63, .3);
+    border-radius: 14px;
+    background: repeating-linear-gradient(135deg,
+      rgba(47, 93, 63, .04) 0 12px, rgba(47, 93, 63, 0) 12px 24px);
+    font: inherit;
+    color: var(--muted);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .25s, color .25s, opacity .25s;
+  }
+  .group-photos.ph-loading:hover { border-color: var(--green); color: var(--green-deep); }
+  .group-photos.ph-loading.ph-wait { animation: phPulse 1.3s ease-in-out infinite; }
+  .group-head .num:empty { display: none; }      /* 照片没取回来前不显示空的「N 张」 */
+  .ph-skel { font-size: .88rem; letter-spacing: .01em; }
+  .ph-skel .ph-ico { margin-right: .35rem; }
+  .ph-skel.err { color: #b5773a; }
+  @keyframes phPulse { 0%, 100% { opacity: .4; } 50% { opacity: .78; } }
+
 /* ---------------- 日记：一天一组，组内多篇各自独立 ---------------- */
 
 .day { margin-bottom: 1.3rem; }
@@ -686,6 +713,7 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
 @media (max-width: 780px) {
   .item-actions { opacity: 1; }
   .group-photos .shot { width: 112px; height: 112px; }
+    .group-photos.ph-loading { min-height: 112px; padding: .9rem .8rem; }
   .day-notes { grid-template-columns: 1fr; }
   .lightbox { padding: 1rem; }
   .lightbox .lb-nav { width: 38px; height: 38px; font-size: 1.25rem; }

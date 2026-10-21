@@ -172,8 +172,8 @@
   let ITEMS = new Map();     // id → 解析后的记录
   let authors = [];
 
-  async function getItems() {
-    const res = await fetch('/api/items', {
+  async function getItems(query) {
+    const res = await fetch('/api/items' + (query ? '?' + query : ''), {
       headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
     });
     if (res.status === 401) { sessionStorage.removeItem(KEY); location.replace('/'); return null; }
@@ -185,36 +185,110 @@
     return data.map(parseItem);
   }
 
-  /* ---------------- 相册：按标签分块 ---------------- */
-  function renderAlbum(items) {
+  /* ---------------- 相册：按标签分块 + 照片懒加载 ----------------
+     第一屏先出「块标题 + 占位」，照片等滚到这一块（或点一下）再取，
+     这样打开相册不会一次性把几百 KB 的图片全下下来。 */
+  let loadedGroups = new Set();     // 已经取过照片的块（key = 记录 id 串）
+  let albumIO = null;
+
+  const albumLabelOf = row => {
+    const m = MARK.exec(row.title || '');
+    const rest = m ? String(m[2] || '').trim() : '';
+    return rest || row.title || '照片';
+  };
+
+  function renderAlbumSkeleton(rows) {
     const groups = new Map();
-    items.forEach(i => {
-      if (i.category && i.category !== 'album') return;   // 别的分区的不管
-      if (!i.images.length) return;                       // 没有图片的不进相册
-      const key = i.label || i.title || '照片';
-      if (!groups.has(key)) groups.set(key, { label: key, ids: [], photos: [], latest: '' });
+    rows.forEach(r => {
+      const key = albumLabelOf(r);
+      if (!groups.has(key)) groups.set(key, { label: key, ids: [], latest: '' });
       const g = groups.get(key);
-      g.ids.push(i.id);
-      g.photos.push(...i.images);
-      const t = i.created_at || '';
+      g.ids.push(r.id);
+      const t = r.created_at || '';
       if (t > g.latest) g.latest = t;
     });
 
     const list = [...groups.values()].sort((a, b) => b.latest.localeCompare(a.latest));
-    const total = list.reduce((n, g) => n + g.photos.length, 0);
-    $('count').textContent = total ? total + ' 张' : '';
-    if (!total) return emptyBox('相册还是空的', conf.tip);
+    $('count').textContent = list.length ? list.length + ' 组照片' : '';
+    if (!list.length) return emptyBox('相册还是空的', conf.tip);
 
-    return list.map(g => `
-      <section class="album-group">
+    return list.map(g => {
+      const key = g.ids.join(',');
+      return `
+      <section class="album-group" data-group="${key}" data-label="${esc(g.label)}">
         <div class="group-head">
-          <h2>${esc(g.label)}<span class="num">${g.photos.length} 张</span></h2>
+          <h2>${esc(g.label)}<span class="num" data-num="${key}"></span></h2>
           ${actionsHTML(g.ids)}
         </div>
-        <div class="group-photos">
-          ${g.photos.map(u => `<figure class="shot"><img src="${esc(u)}" alt="${esc(g.label)}" loading="lazy" data-zoom></figure>`).join('')}
-        </div>
-      </section>`).join('');
+        <button class="group-photos ph-loading" type="button" data-load="${key}">
+          <span class="ph-skel"><span class="ph-ico">🖼</span>滚到这一块就会自动显示照片</span>
+        </button>
+      </section>`;
+    }).join('');
+  }
+
+  function updateAlbumCount() {
+    const secs = [...document.querySelectorAll('.album-group')];
+    if (!secs.length) return;
+    if (secs.some(s => s.querySelector('.ph-loading'))) {   // 还有没取回来的块
+      $('count').textContent = secs.length + ' 组照片';
+      return;
+    }
+    $('count').textContent = document.querySelectorAll('.group-photos .shot').length + ' 张';
+  }
+
+  async function loadGroup(key) {
+    if (loadedGroups.has(key)) return;
+    loadedGroups.add(key);
+    const el = document.querySelector(`.album-group[data-group="${key}"]`);
+    const box = el && el.querySelector('.group-photos');
+    if (box) box.classList.add('ph-wait');
+    try {
+      const d = await fetch('/api/items?type=album&ids=' + key, {
+        headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
+      });
+      if (!d.ok) throw new Error('HTTP ' + d.status);
+      const rows = await d.json();
+      if (!Array.isArray(rows)) throw new Error('bad data');
+      const items = rows.map(parseItem);
+      items.forEach(i => ITEMS.set(i.id, i));
+      const photos = items.flatMap(i => i.images);
+      if (!el) return;
+      const num = el.querySelector('.num');
+      if (num) num.textContent = photos.length + ' 张';
+      const label = el.dataset.label || '';
+      if (!photos.length && items.some(i => i.category === null)) {
+        // 早期没标记、又没有图片的记录：不进相册（和以前的规则一致）
+        el.remove();
+        updateAlbumCount();
+        return;
+      }
+      if (box) box.outerHTML = `<div class="group-photos">` + (photos.length
+        ? photos.map(u => `<figure class="shot"><img src="${esc(u)}" alt="${esc(label)}" loading="lazy" data-zoom></figure>`).join('')
+        : `<p class="tip">这一块还没有照片</p>`) + `</div>`;
+      updateAlbumCount();
+    } catch (err) {
+      loadedGroups.delete(key);
+      if (box) {
+        box.classList.remove('ph-wait');
+        box.innerHTML = `<span class="ph-skel err">⚠️ 照片没取回来，点一下重试</span>`;
+      }
+    }
+  }
+
+  function watchGroups() {
+    if (type !== 'album') return;
+    if (albumIO) { albumIO.disconnect(); albumIO = null; }
+    const sections = [...document.querySelectorAll('.album-group[data-group]')];
+    if (!('IntersectionObserver' in window)) { sections.forEach(s => loadGroup(s.dataset.group)); return; }
+    albumIO = new IntersectionObserver(entries => {
+      entries.forEach(en => {
+        if (!en.isIntersecting) return;
+        albumIO.unobserve(en.target);
+        loadGroup(en.target.dataset.group);
+      });
+    }, { rootMargin: '160px 0px' });
+    sections.forEach(s => albumIO.observe(s));
   }
 
   /* ---------------- 日记：同一天可以有多篇 ---------------- */
@@ -407,9 +481,18 @@
     }
   }
 
-  function startEdit(id) {
-    const it = ITEMS.get(id);
+  async function startEdit(id) {
+    let it = ITEMS.get(id);
     if (!it) return;
+    if (type === 'album' && !it.images.length) {
+      // 照片是懒加载的：这一块正文还没取过，先取回来再回填
+      const btn = document.querySelector(`.item-actions [data-act="edit"][data-ids="${id}"]`);
+      const sec = btn && btn.closest('.album-group');
+      const key = (sec && sec.dataset.group) || String(id);
+      setHint('正在取这一块的照片…');
+      await loadGroup(key);
+      it = ITEMS.get(id) || it;
+    }
     mode = 'edit'; editingId = id;
     $('addPanel').hidden = false;
     $('addPanel').classList.add('editing');
@@ -554,6 +637,8 @@
 
   /* ================= 事件代理 ================= */
   document.addEventListener('click', e => {
+    const ld = e.target.closest('[data-load]');
+    if (ld) { loadGroup(ld.dataset.load); return; }
     const rm = e.target.closest('[data-rm]');
     if (rm) {
       imgs.splice(Number(rm.dataset.rm), 1);
@@ -611,13 +696,23 @@
   }
 
   async function refresh() {
-    const items = await getItems();
+    ITEMS = new Map();
+    if (type === 'album') {
+      // 只要 id/title/created_at（不带图片）—— 先搭出分块骨架，照片等滚到了再取
+      const rows = await getItems('type=album&light=1');
+      if (!rows) return;
+      rows.forEach(r => ITEMS.set(r.id, parseItem(r)));    // 先记着，删除时能叫得上名字
+      loadedGroups = new Set();
+      $('body').innerHTML = renderAlbumSkeleton(rows);
+      loadAuthors(rows);
+      watchGroups();
+      return;
+    }
+    const items = await getItems('type=' + type);
     if (!items) return;
     ITEMS = new Map(items.map(i => [i.id, i]));
     loadAuthors(items);
-    $('body').innerHTML = type === 'album' ? renderAlbum(items)
-                        : type === 'timeline' ? renderTimeline(items)
-                        : renderDiary(items);
+    $('body').innerHTML = type === 'timeline' ? renderTimeline(items) : renderDiary(items);
   }
 
   /* ================= 初始化 ================= */
