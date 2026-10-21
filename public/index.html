@@ -61,6 +61,15 @@
         </div>
       </a>
     </div>
+
+    <!-- 把三个模块的数据打包成一个 .md 存到本地 -->
+    <div class="export-bar">
+      <button class="btn-export" id="exportBtn" type="button">
+        <span class="ico">⬇</span><span id="exportBtnTxt">下载全部数据（.md）</span>
+      </button>
+      <button class="btn-export-alt" id="exportTxtBtn" type="button">只要文字版</button>
+      <p class="export-hint" id="exportHint">把相片、日记、时光轴整理成一份 .md 文件，存到你这台设备上</p>
+    </div>
   </div>
 
   <script>
@@ -155,6 +164,160 @@
         console.warn('统计失败：', err.message);
       }
     }
+
+    // ---------- 下载全部数据：把三个模块的内容整理成一个 .md ----------
+    const M_MARK  = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
+    const M_DMARK = /^\[日记\]\s*(\d{4}-\d{2}-\d{2})(?:\s*@\s*(\S+))?\s*$/;
+    const M_IMG   = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
+    const M_CAT   = { '相片': 'album', '日记': 'diary', '时光轴': 'timeline' };
+
+    // 从 content 里挑出图片（data URL / 图片链接）和剩下的正文
+    function splitContent(content) {
+      const raw = String(content == null ? '' : content);
+      const images = raw.match(M_IMG) || [];
+      let text = raw;
+      images.forEach(u => { text = text.split(u).join(''); });
+      text = text
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{2,}/g, '\n')
+        .replace(/^[\s,，、;；]+/, '')
+        .replace(/[\s,，、;；]+$/, '')
+        .trim();
+      return { images, text };
+    }
+
+    const mPad = n => String(n).padStart(2, '0');
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      if (isNaN(d)) return '';
+      return `${d.getFullYear()}-${mPad(d.getMonth() + 1)}-${mPad(d.getDate())} ${mPad(d.getHours())}:${mPad(d.getMinutes())}`;
+    }
+    const fmtHM = ts => { const s = fmtTime(ts); return s ? s.slice(11) : ''; };   // HH:MM
+    const fmtDay = ts => { const s = fmtTime(ts); return s ? s.slice(0, 10) : ''; }; // YYYY-MM-DD
+
+    // 解析一条记录：分区 / 时间点 / 标签 / 作者 / 图片 / 正文
+    function rowOf(i) {
+      const m = M_MARK.exec(i.title || '');
+      const c = splitContent(i.content);
+      const cat = m ? M_CAT[m[1]] : null;              // null = 早期没有标记的记录
+      const rest = m ? String(m[2] || '').trim() : '';
+      let stamp = '', label = '', author = '';
+      if (cat === 'album') label = rest || '照片';
+      else if (cat === 'diary') {
+        const dm = M_DMARK.exec(i.title || '');
+        if (dm) { stamp = dm[1]; author = dm[2] || ''; } else stamp = rest;
+      } else if (cat === 'timeline') stamp = rest;
+      return { id: i.id, cat, stamp, label, author, images: c.images, text: c.text, created_at: i.created_at };
+    }
+
+    // 正文保留换行（Markdown 行尾加两个空格 = 强制换行）
+    const para = t => String(t || '').split('\n').map(l => l.trimEnd()).filter(Boolean).join('  \n');
+
+    function buildMd(rows, withImages) {
+      const now = new Date();
+      const stamp = `${fmtDay(now)} ${mPad(now.getHours())}:${mPad(now.getMinutes())}`;
+
+      // ① 相册：按标签分组，最新的一组在最前
+      const groups = new Map();
+      rows.forEach(r => {
+        if (r.cat && r.cat !== 'album') return;
+        if (!r.images.length) return;
+        const key = r.label || '照片';
+        if (!groups.has(key)) groups.set(key, { label: key, images: [], latest: '' });
+        const g = groups.get(key);
+        g.images.push(...r.images);
+        if (String(r.created_at || '') > g.latest) g.latest = r.created_at || '';
+      });
+      const albumList = [...groups.values()].sort((a, b) => b.latest.localeCompare(a.latest));
+      const albumCount = albumList.reduce((n, g) => n + g.images.length, 0);
+
+      // ② 日记：日期新的在上，同一天先写的在上；③ 时光轴：时间点新的在上
+      const dayOf   = r => r.stamp || fmtDay(r.created_at) || '';
+      const stampOf = r => r.stamp || fmtTime(r.created_at) || '';
+      const diaries = rows.filter(r => r.cat === 'diary' || r.cat === null)
+        .sort((a, b) => dayOf(b).localeCompare(dayOf(a)) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+      const times = rows.filter(r => r.cat === 'timeline' || r.cat === null)
+        .sort((a, b) => stampOf(b).localeCompare(stampOf(a)));
+
+      let md = '';
+      md += `# 我们的小天地 · 全部数据\n\n`;
+      md += `> 导出时间：${stamp}（本机时间）\n`;
+      md += `> 相片 ${albumList.length} 组 / ${albumCount} 张 · 日记 ${diaries.length} 篇 · 时光轴 ${times.length} 条\n`;
+      md += withImages
+        ? `> 照片已随文字一起内嵌在这个文件里，整份内容可以离线保存。\n`
+        : `> 这是**文字版**，照片没有内嵌（想要照片请用「下载全部数据（.md）」）。\n`;
+      md += `\n---\n\n`;
+
+      // ---------------- 相片回忆 ----------------
+      md += `## 📷 相片回忆（${albumCount} 张）\n\n`;
+      if (!albumList.length) md += `（还没有照片）\n\n`;
+      albumList.forEach((g, gi) => {
+        md += `### ${gi + 1}. ${g.label}\n\n`;
+        md += `- 张数：${g.images.length} 张 · 最近加入：${fmtTime(g.latest) || '—'}\n\n`;
+        if (withImages) g.images.forEach(u => { md += `![${g.label}](${u})\n\n`; });
+        else md += `- 🖼 图片 ${g.images.length} 张（文字版不含图片）\n\n`;
+      });
+
+      // ---------------- 心情日记 ----------------
+      md += `---\n\n## 📖 心情日记（${diaries.length} 篇）\n\n`;
+      if (!diaries.length) md += `（还没有日记）\n\n`;
+      let curDay = null, idx = 0;
+      diaries.forEach(r => {
+        const d = dayOf(r) || '未标日期';
+        if (d !== curDay) { md += `### ${d}\n\n`; curDay = d; idx = 0; }
+        idx++;
+        md += `#### ${idx}. ${fmtHM(r.created_at) || ''}${r.author ? ' · ' + r.author : ' · 未署名'}\n\n`;
+        md += r.text ? para(r.text) + `\n\n` : `（这一篇没有写文字）\n\n`;
+      });
+
+      // ---------------- 时光轴 ----------------
+      md += `---\n\n## ⏳ 时光轴（${times.length} 条）\n\n`;
+      if (!times.length) md += `（时光轴还是空的）\n\n`;
+      times.forEach(r => {
+        md += `### ${stampOf(r) || '未标时间'}\n\n`;
+        md += r.text ? para(r.text) + `\n\n` : `（没有留下文字）\n\n`;
+      });
+
+      md += `---\n\n*这份文件由「我们的小天地」首页的「下载全部数据」生成 · ${stamp}*\n`;
+      return md;
+    }
+
+    function fileStamp() {
+      const d = new Date();
+      return `${fmtDay(d)}_${mPad(d.getHours())}${mPad(d.getMinutes())}`;
+    }
+
+    async function exportData(withImages) {
+      const btn = $('exportBtn'), btnTxt = $('exportBtnTxt'), btn2 = $('exportTxtBtn'), hint = $('exportHint');
+      const oldTxt = btnTxt.textContent;
+      btn.disabled = true; btn2.disabled = true;
+      btnTxt.textContent = '打包中…';
+      hint.textContent = '正在把三个模块的内容整理成一份文件…';
+      try {
+        const items = await getItems(false);      // 要完整内容（含图片）
+        if (!items) return;
+        const md = buildMd(items.map(rowOf), withImages);
+        const name = `我们的小天地_${fileStamp()}${withImages ? '' : '_文字版'}.md`;
+        const blob = new Blob(['\uFEFF' + md], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        hint.textContent = `已生成 ${name}（${Math.max(1, Math.round(blob.size / 1024))} KB），在浏览器的下载记录里就能找到 ✅`;
+      } catch (err) {
+        hint.textContent = '导出失败：' + err.message;
+      } finally {
+        btn.disabled = false; btn2.disabled = false;
+        btnTxt.textContent = oldTxt;
+      }
+    }
+
+    $('exportBtn').addEventListener('click', () => exportData(true));
+    $('exportTxtBtn').addEventListener('click', () => exportData(false));
 
     // ---------- 初始化 ----------
     $('lockCard').addEventListener('submit', unlock);

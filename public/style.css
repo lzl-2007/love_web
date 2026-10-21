@@ -690,3 +690,66 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
   .lightbox { padding: 1rem; }
   .lightbox .lb-nav { width: 38px; height: 38px; font-size: 1.25rem; }
 }
+
+/* ==========================================================
+   首页 · 下载全部数据（.md）
+   ========================================================== */
+
+.export-bar {
+  margin: 2.2rem auto 2.8rem;
+  max-width: 640px;
+  padding: 0 .3rem;
+  text-align: center;
+}
+
+.btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .78rem 1.45rem;
+  border: 1px solid #2b5639;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #3a7150, var(--green-deep));
+  color: #fff;
+  font-family: inherit;
+  font-size: .96rem;
+  letter-spacing: .02em;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform .2s, box-shadow .22s, opacity .2s;
+}
+
+.btn-export .ico { font-size: 1.05rem; line-height: 1; }
+.btn-export:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.btn-export:active { transform: translateY(0); }
+.btn-export:disabled { opacity: .62; cursor: default; transform: none; }
+
+.btn-export-alt {
+  display: inline-block;
+  margin-left: .7rem;
+  padding: .72rem 1rem;
+  border: 1px dashed rgba(47, 93, 63, .32);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .65);
+  color: var(--green-deep);
+  font-family: inherit;
+  font-size: .87rem;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, opacity .2s;
+}
+
+.btn-export-alt:hover { background: var(--green-soft); border-color: rgba(47, 93, 63, .48); }
+.btn-export-alt:disabled { opacity: .55; cursor: default; }
+
+.export-hint {
+  margin: .85rem 0 0;
+  color: var(--muted);
+  font-size: .84rem;
+  line-height: 1.75;
+}
+
+@media (max-width: 520px) {
+  .export-bar { margin: 1.8rem auto 2.2rem; }
+  .btn-export { width: 100%; justify-content: center; }
+  .btn-export-alt { width: 100%; margin: .6rem 0 0; }
+}
