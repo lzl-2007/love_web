@@ -509,3 +509,184 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
   .timeline { padding-left: 1.7rem; }
   .tl-item::before { left: -1.45rem; }
 }
+
+/* ==========================================================
+   分区页 · 修改/删除按钮 + 相册分块 + 日记分组 + 作者标签
+   ========================================================== */
+
+/* 每条内容右上角的「修改 / 删除」 */
+.item-actions { margin-left: auto; flex: 0 0 auto; display: flex; gap: .3rem; opacity: .5; transition: opacity .2s; }
+.album-group:hover .item-actions,
+.note:hover .item-actions,
+.tl-item:hover .item-actions { opacity: 1; }
+
+.icon-btn {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  font-size: .84rem; line-height: 1;
+  color: var(--green-deep);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .18s, transform .18s, color .18s;
+}
+.icon-btn:hover { background: var(--green-soft); transform: translateY(-1px); }
+.icon-btn.danger { color: #b23c2e; }
+.icon-btn.danger:hover { background: #fdeeec; border-color: #f6d5d0; }
+
+/* ---------------- 相册：一个标签 = 一块区域 ---------------- */
+
+.album-group {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem 1.15rem;
+  margin-bottom: 1.05rem;
+  box-shadow: var(--shadow-sm);
+  animation: rise .45s ease both;
+  transition: box-shadow .26s;
+}
+.album-group:hover { box-shadow: var(--shadow-md); }
+
+.group-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .85rem; }
+.group-head h2 {
+  margin: 0; min-width: 0;
+  font-size: 1.02rem; letter-spacing: .02em;
+  display: flex; align-items: center; gap: .55rem;
+}
+.group-head h2::before {
+  content: "";
+  width: 6px; height: 17px; border-radius: 3px;
+  background: linear-gradient(180deg, #e3b661, #c98b2a);
+  flex: 0 0 auto;
+}
+
+.num {
+  font-size: .72rem; font-weight: 500;
+  color: var(--muted);
+  background: var(--green-soft);
+  border-radius: 999px;
+  padding: .12rem .5rem;
+  white-space: nowrap;
+}
+
+.group-photos { display: flex; flex-wrap: wrap; gap: .55rem; }
+.group-photos .shot {
+  margin: 0;
+  width: 168px; height: 168px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #f3f6f2;
+  cursor: zoom-in;
+}
+.group-photos .shot img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  transition: transform .45s cubic-bezier(.2, .8, .2, 1);
+}
+.group-photos .shot:hover img { transform: scale(1.07); }
+
+/* ---------------- 日记：一天一组，组内多篇各自独立 ---------------- */
+
+.day { margin-bottom: 1.3rem; }
+.day-head { display: flex; align-items: center; gap: .55rem; margin: 0 0 .7rem; }
+.day-date { font-size: .95rem; font-weight: 600; color: var(--green-deep); letter-spacing: .04em; }
+.day-date::before {
+  content: ""; display: inline-block;
+  width: 7px; height: 7px; margin-right: .5rem;
+  border-radius: 50%; background: var(--green); vertical-align: middle;
+}
+.day-notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: .85rem; }
+
+.note-top { display: flex; align-items: center; gap: .5rem; margin-bottom: .55rem; }
+.author {
+  font-size: .74rem; font-weight: 600; letter-spacing: .02em;
+  padding: .14rem .55rem;
+  border-radius: 999px;
+  color: var(--c, var(--green-deep));
+  background: var(--cbg, var(--green-soft));
+  border: 1px solid var(--cbd, transparent);
+}
+.author.ghost { color: var(--muted); background: #f2f4f1; border-color: #e6eae4; font-weight: 500; }
+.note-time { font-size: .72rem; color: #b3c0b6; }
+
+/* ---------------- 时光轴：时间点与按钮同一行 ---------------- */
+
+.item-top { display: flex; align-items: center; gap: .5rem; }
+.item-top .dot-date { margin: 0; }
+
+/* ---------------- 表单：可单独移除的预览图 / 编辑态 ---------------- */
+
+.thumb-wrap { position: relative; width: 74px; height: 74px; }
+.thumb-wrap img {
+  width: 74px; height: 74px; display: block;
+  object-fit: cover; border-radius: 10px; border: 1px solid var(--line);
+}
+.thumb-wrap .rm {
+  position: absolute; top: -7px; right: -7px;
+  width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center;
+  font-size: .68rem; line-height: 1;
+  color: #fff; background: #b23c2e;
+  border: 0; border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .22);
+}
+.thumb-wrap .rm:hover { background: #c94a3a; }
+
+.form-actions { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; }
+.form-actions .btn-solid { margin-top: 0; }
+
+.btn-ghost-dark {
+  padding: .62rem 1.1rem;
+  font-size: .9rem;
+  color: var(--body-text);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background .18s;
+}
+.btn-ghost-dark:hover { background: var(--green-soft); }
+
+.addpanel.editing {
+  border-color: rgba(217, 164, 65, .55);
+  box-shadow: 0 0 0 3px rgba(217, 164, 65, .13), var(--shadow-sm);
+}
+.addpanel.editing h3::after {
+  content: " · 正在修改";
+  font-size: .78rem; font-weight: 500; color: var(--gold);
+}
+
+/* ---------------- 放大查看：左右翻页 ---------------- */
+
+.lightbox .lb-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 46px; height: 46px;
+  display: grid; place-items: center;
+  font-size: 1.5rem; line-height: 1;
+  color: #fff;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 2;
+}
+.lightbox .lb-nav:hover { background: rgba(255, 255, 255, .26); }
+.lightbox #lbPrev { left: 1.2rem; }
+.lightbox #lbNext { right: 1.2rem; }
+.lightbox .lb-count {
+  position: absolute; bottom: 1.4rem; left: 50%; transform: translateX(-50%);
+  font-size: .8rem; letter-spacing: .08em;
+  color: rgba(255, 255, 255, .8);
+}
+
+@media (max-width: 780px) {
+  .item-actions { opacity: 1; }
+  .group-photos .shot { width: 112px; height: 112px; }
+  .day-notes { grid-template-columns: 1fr; }
+  .lightbox { padding: 1rem; }
+  .lightbox .lb-nav { width: 38px; height: 38px; font-size: 1.25rem; }
+}

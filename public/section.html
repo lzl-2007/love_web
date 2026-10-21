@@ -13,19 +13,23 @@
       <h1 id="title">加载中…</h1>
       <div class="top-actions">
         <span class="count" id="count"></span>
-        <button class="btn-plain" id="addBtn" onclick="toggleForm()">＋ 添加</button>
+        <button class="btn-plain" id="addBtn" type="button" onclick="toggleForm()">＋ 添加</button>
       </div>
     </div>
 
-    <!-- ============ 添加面板（三种分区各自的表单） ============ -->
+    <!-- ============ 添加 / 修改 面板 ============ -->
     <div class="panel addpanel" id="addPanel" hidden>
       <h3 id="formTitle">添加</h3>
       <div id="formFields"></div>
 
       <label class="lbl">管理密码</label>
-      <input id="adminPwd" class="form-input" type="password" placeholder="添加内容需要管理密码（本次会话只需输一次）" autocomplete="off">
+      <input id="adminPwd" class="form-input" type="password"
+             placeholder="添加 / 修改 / 删除都需要管理密码（本次会话只需输一次）" autocomplete="off">
 
-      <button class="btn-solid" id="submitBtn" onclick="submitEntry()">保存</button>
+      <div class="form-actions">
+        <button class="btn-solid" id="submitBtn" type="button" onclick="submitEntry()">保存</button>
+        <button class="btn-ghost-dark" id="cancelBtn" type="button" hidden onclick="cancelEdit()">取消修改</button>
+      </div>
       <div class="hint" id="formHint"></div>
     </div>
 
@@ -34,330 +38,607 @@
     </div>
   </div>
 
-  <!-- 点图片放大 -->
-  <div class="lightbox" id="lightbox"><img id="lightboxImg" alt=""></div>
+  <!-- 已知的作者名字（输入时有下拉提示） -->
+  <datalist id="authors"></datalist>
+
+  <!-- 点图片放大（可左右翻） -->
+  <div class="lightbox" id="lightbox">
+    <button class="lb-nav" id="lbPrev" type="button" onclick="step(-1)">‹</button>
+    <img id="lightboxImg" alt="">
+    <button class="lb-nav" id="lbNext" type="button" onclick="step(1)">›</button>
+    <div class="lb-count" id="lbCount"></div>
+  </div>
   <div class="toast" id="toast"></div>
 
   <script>
-    const KEY = 'view_pwd';
-    const AKEY = 'admin_pwd';
-    const $ = id => document.getElementById(id);
+  /* ============================================================
+     分区页：展示 + 添加 + 修改 + 删除
+     - 相册：按「说明标签」分块，一组一块，组内图片横排
+     - 日记：同一天可以有多篇，各自独立，带作者标签
+     - 时光轴：按时间点排列
+     ============================================================ */
+  const KEY = 'view_pwd';        // 查看密码（sessionStorage）
+  const AKEY = 'admin_pwd';      // 管理密码（sessionStorage）
+  const LAST_AUTHOR = 'last_author';
+  const $ = id => document.getElementById(id);
 
-    /* ---------------- 分区配置 ---------------- */
-    const SECTIONS = {
-      album:    { title: '📷 相片回忆', tip: '选好照片 + 写个说明标签，就会出现在这里' },
-      diary:    { title: '📖 心情日记', tip: '同一个日期再添加，会接在那天的后面' },
-      timeline: { title: '⏳ 时光轴',   tip: '同一个时间点再添加，会并入同一条' }
+  const SECTIONS = {
+    album:    { title: '📷 相片回忆', tip: '选好照片 + 写个说明标签，同一标签的照片会放在同一块里' },
+    diary:    { title: '📖 心情日记', tip: '同一天可以写很多篇，每篇都会单独留着' },
+    timeline: { title: '⏳ 时光轴',   tip: '同一个时间点再添加，会并入同一条' }
+  };
+  const params = new URLSearchParams(location.search);
+  const type = SECTIONS[params.get('type')] ? params.get('type') : 'diary';
+  const conf = SECTIONS[type];
+  document.title = conf.title + ' · 我们的小天地';
+  $('title').textContent = conf.title;
+
+  /* ---------------- 小工具 ---------------- */
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  const MARK = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
+  const DMARK = /^\[日记\]\s*(\d{4}-\d{2}-\d{2})(?:\s*@\s*(\S+))?\s*$/;
+  const IMG_RE = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
+
+  // 取出图片（链接 / data URL）和剩下的正文
+  function splitContent(content) {
+    const raw = String(content == null ? '' : content);
+    const images = raw.match(IMG_RE) || [];
+    let text = raw;
+    images.forEach(u => { text = text.split(u).join(''); });
+    text = text
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{2,}/g, '\n')
+      .replace(/^[\s,，、;；]+/, '')
+      .replace(/[\s,，、;；]+$/, '')
+      .trim();
+    return { images, text };
+  }
+
+  // 解析一条记录：分区 / 时间点 / 标签 / 作者
+  function parseItem(i) {
+    const m = MARK.exec(i.title || '');
+    const c = splitContent(i.content);
+    const cat = m ? ({ '相片': 'album', '日记': 'diary', '时光轴': 'timeline' })[m[1]] : null;
+    const rest = m ? String(m[2] || '').trim() : '';
+    let stamp = '', label = '', author = '';
+    if (cat === 'album') {
+      label = rest || '照片';
+    } else if (cat === 'diary') {
+      const dm = DMARK.exec(i.title || '');
+      if (dm) { stamp = dm[1]; author = dm[2] || ''; }
+      else { stamp = rest; }            // 老格式：[日记] 2026-07-01（没写作者）
+    } else if (cat === 'timeline') {
+      stamp = rest;
+    }
+    return {
+      id: i.id, category: cat, stamp, label, author,
+      title: i.title, images: c.images, text: c.text, created_at: i.created_at
     };
+  }
 
-    const params = new URLSearchParams(location.search);
-    const type = SECTIONS[params.get('type')] ? params.get('type') : 'diary';
-    const conf = SECTIONS[type];
-    document.title = conf.title + ' · 我们的小天地';
-    $('title').textContent = conf.title;
+  function fmtDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function ymd(ts) {
+    const d = ts ? new Date(ts) : new Date();
+    if (isNaN(d)) return '';
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  const todayStr = () => ymd();
+  const nowStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
 
-    /* ---------------- 小工具 ---------------- */
-    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  const keyOf = it => it.stamp || fmtDate(it.created_at) || '';
 
-    const MARK = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
-    const IMG_RE = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('on');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => t.classList.remove('on'), 2600);
+  }
+  function setHint(msg, err) {
+    const h = $('formHint');
+    h.className = 'hint' + (err ? ' err' : '');
+    h.textContent = msg || '';
+  }
+  function emptyBox(main, tip) {
+    return `<div class="empty"><span class="big">🌱</span><p>${esc(main)}</p><p class="tip">${esc(tip || conf.tip)}</p></div>`;
+  }
 
-    // 取出图片（链接 / data URL）和剩下的正文
-    function splitContent(content) {
-      const raw = String(content == null ? '' : content);
-      const images = raw.match(IMG_RE) || [];
-      let text = raw;
-      images.forEach(u => { text = text.split(u).join(''); });
-      text = text
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n{2,}/g, '\n')
-        .replace(/^[\s,，、;；]+/, '')
-        .replace(/[\s,，、;；]+$/, '')
-        .trim();
-      return { images, text };
-    }
+  // 作者标签的颜色：按名字算一个固定色（同一个人永远同色）
+  function authorStyle(name) {
+    let h = 0;
+    for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) % 360;
+    return `--c: hsl(${h}, 46%, 34%); --cbg: hsl(${h}, 52%, 94%); --cbd: hsl(${h}, 40%, 82%)`;
+  }
 
-    // 解析一条记录属于哪个分区（title 前缀标记）
-    function parseItem(i) {
-      const m = MARK.exec(i.title || '');
-      const c = splitContent(i.content);
-      return {
-        id: i.id,
-        category: m ? ({ '相片': 'album', '日记': 'diary', '时光轴': 'timeline' })[m[1]] : null,
-        stamp: m && m[1] !== '相片' ? m[2] : '',
-        label: m && m[1] === '相片' ? (m[2] || '照片') : '',
-        title: i.title,
-        images: c.images,
-        text: c.text,
-        created_at: i.created_at
-      };
-    }
+  // 每条内容右上角的「修改 / 删除」
+  function actionsHTML(ids) {
+    const one = ids.length === 1;
+    return `<span class="item-actions">
+      ${one ? `<button class="icon-btn" type="button" data-act="edit" data-ids="${ids[0]}" title="修改">✎</button>` : ''}
+      <button class="icon-btn danger" type="button" data-act="del" data-ids="${ids.join(',')}" title="删除">🗑</button>
+    </span>`;
+  }
 
-    function fmtDate(ts) {
-      if (!ts) return '';
-      const d = new Date(ts);
-      if (isNaN(d)) return '';
-      const p = n => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-    }
-    const todayStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
-    const nowStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  /* ---------------- 取数据 ---------------- */
+  let ITEMS = new Map();     // id → 解析后的记录
+  let authors = [];
 
-    // 排序用的时间戳字符串：优先用记录里的时间点，否则用创建时间
-    const sortKey = it => it.stamp || fmtDate(it.created_at);
-
-    function toast(msg) {
-      const t = $('toast');
-      t.textContent = msg;
-      t.classList.add('on');
-      clearTimeout(toast._t);
-      toast._t = setTimeout(() => t.classList.remove('on'), 2600);
-    }
-    function emptyBox(main, tip) {
-      return `<div class="empty"><span class="big">🌱</span><p>${esc(main)}</p><p class="tip">${esc(tip || conf.tip)}</p></div>`;
-    }
-
-    /* ---------------- 取数据 ---------------- */
-    async function getItems() {
-      const res = await fetch('/api/items', {
-        headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
-      });
-      if (res.status === 401) { sessionStorage.removeItem(KEY); location.replace('/'); return null; }
-      const data = await res.json();
-      if (!res.ok || !Array.isArray(data)) {
-        const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
-        throw new Error(msg);
-      }
-      return data.map(parseItem);
-    }
-
-    /* ---------------- 三种渲染 ---------------- */
-    function renderAlbum(items) {
-      const photos = [];
-      items.forEach(i => {
-        if (i.category && i.category !== 'album') return;          // 别的分区的不管
-        if (!i.images.length) return;                              // 没有图片的不进相册
-        i.images.forEach(u => photos.push({ url: u, label: i.label || i.title || '照片' }));
-      });
-      $('count').textContent = photos.length ? photos.length + ' 张' : '';
-      if (!photos.length) return emptyBox('相册还是空的', conf.tip);
-      return `<div class="photos">` + photos.map(p => `
-        <figure class="photo">
-          <img src="${esc(p.url)}" alt="${esc(p.label)}" loading="lazy" onclick="zoom('${esc(p.url).replace(/'/g, "\\'")}')">
-          <figcaption>${esc(p.label)}</figcaption>
-        </figure>`).join('') + `</div>`;
-    }
-
-    function renderDiary(items) {
-      const list = items.filter(i => i.category === 'diary' || i.category === null)
-                        .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-      $('count').textContent = list.length ? list.length + ' 篇' : '';
-      if (!list.length) return emptyBox('还没有写下什么', conf.tip);
-      return `<div class="diary">` + list.map(i => {
-        const head = i.stamp || fmtDate(i.created_at) || '未标日期';
-        const sub = (i.category === null && i.title) ? i.title : '';   // 以前手动加的内容仍显示标题
-        return `<div class="note">
-          <div class="dot-date">${esc(head)}</div>
-          ${sub ? `<h3>${esc(sub)}</h3>` : ''}
-          ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
-          ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" onclick="zoom('${esc(u).replace(/'/g, "\\'")}')"></div>`).join('')}
-        </div>`;
-      }).join('') + `</div>`;
-    }
-
-    function renderTimeline(items) {
-      const list = items.filter(i => i.category === 'timeline' || i.category === null)
-                        .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-      $('count').textContent = list.length ? list.length + ' 条' : '';
-      if (!list.length) return emptyBox('时间轴还是空的', conf.tip);
-      return `<div class="timeline">` + list.map(i => {
-        const head = i.stamp || fmtDate(i.created_at) || ('#' + i.id);
-        const sub = (i.category === null && i.title) ? i.title : '';
-        return `<div class="tl-item">
-          <div class="dot-date">${esc(head)}</div>
-          ${sub ? `<h3>${esc(sub)}</h3>` : ''}
-          ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
-          ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" onclick="zoom('${esc(u).replace(/'/g, "\\'")}')"></div>`).join('')}
-        </div>`;
-      }).join('') + `</div>`;
-    }
-
-    /* ---------------- 图片放大 ---------------- */
-    function zoom(url) {
-      $('lightboxImg').src = url;
-      $('lightbox').classList.add('on');
-    }
-    $('lightbox').addEventListener('click', () => {
-      $('lightbox').classList.remove('on');
-      $('lightboxImg').src = '';
+  async function getItems() {
+    const res = await fetch('/api/items', {
+      headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') $('lightbox').classList.remove('on'); });
-
-    /* ================= 添加功能 ================= */
-    function formHTML() {
-      if (type === 'album') {
-        return `
-          <label class="lbl">选择图片（可多选，会自动压缩）</label>
-          <label class="file-box">📷 点这里选照片<input id="f-files" type="file" accept="image/*" multiple></label>
-          <div class="thumbs" id="f-previews"></div>
-          <label class="lbl">或者粘贴图片链接（每行一个，可留空）</label>
-          <textarea id="f-links" class="form-input" placeholder="https://...jpg"></textarea>
-          <label class="lbl">说明标签</label>
-          <input id="f-label" class="form-input" placeholder="比如：2026 秋天的公园">`;
-      }
-      if (type === 'diary') {
-        return `
-          <label class="lbl">日期</label>
-          <input id="f-when" class="form-input" type="date" value="${todayStr()}">
-          <label class="lbl">想说的话</label>
-          <textarea id="f-content" class="form-input" placeholder="今天想说点什么…"></textarea>`;
-      }
-      return `
-        <label class="lbl">时间点</label>
-        <input id="f-when" class="form-input" type="datetime-local" value="${nowStr()}">
-        <label class="lbl">发生了什么</label>
-        <textarea id="f-content" class="form-input" placeholder="记下这个时间点的事…"></textarea>`;
+    if (res.status === 401) { sessionStorage.removeItem(KEY); location.replace('/'); return null; }
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data)) {
+      const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+      throw new Error(msg);
     }
+    return data.map(parseItem);
+  }
+
+  /* ---------------- 相册：按标签分块 ---------------- */
+  function renderAlbum(items) {
+    const groups = new Map();
+    items.forEach(i => {
+      if (i.category && i.category !== 'album') return;   // 别的分区的不管
+      if (!i.images.length) return;                       // 没有图片的不进相册
+      const key = i.label || i.title || '照片';
+      if (!groups.has(key)) groups.set(key, { label: key, ids: [], photos: [], latest: '' });
+      const g = groups.get(key);
+      g.ids.push(i.id);
+      g.photos.push(...i.images);
+      const t = i.created_at || '';
+      if (t > g.latest) g.latest = t;
+    });
+
+    const list = [...groups.values()].sort((a, b) => b.latest.localeCompare(a.latest));
+    const total = list.reduce((n, g) => n + g.photos.length, 0);
+    $('count').textContent = total ? total + ' 张' : '';
+    if (!total) return emptyBox('相册还是空的', conf.tip);
+
+    return list.map(g => `
+      <section class="album-group">
+        <div class="group-head">
+          <h2>${esc(g.label)}<span class="num">${g.photos.length} 张</span></h2>
+          ${actionsHTML(g.ids)}
+        </div>
+        <div class="group-photos">
+          ${g.photos.map(u => `<figure class="shot"><img src="${esc(u)}" alt="${esc(g.label)}" loading="lazy" data-zoom></figure>`).join('')}
+        </div>
+      </section>`).join('');
+  }
+
+  /* ---------------- 日记：同一天可以有多篇 ---------------- */
+  const dayOf = it => it.stamp || ymd(it.created_at) || '';
+  function renderDiary(items) {
+    const list = items.filter(i => i.category === 'diary' || i.category === null)
+                      .sort((a, b) => dayOf(b).localeCompare(dayOf(a))          // 日期新的在上
+                                   || String(a.created_at || '').localeCompare(String(b.created_at || '')));  // 同一天：先写的在上
+    $('count').textContent = list.length ? list.length + ' 篇' : '';
+    if (!list.length) return emptyBox('还没有写下什么', conf.tip);
+
+    // 按日期分组：一天一组，组内每篇各自独立
+    const days = new Map();
+    list.forEach(i => {
+      const d = i.stamp || ymd(i.created_at) || '未标日期';
+      if (!days.has(d)) days.set(d, []);
+      days.get(d).push(i);
+    });
+
+    return [...days.entries()].map(([d, arr]) => `
+      <section class="day">
+        <div class="day-head">
+          <span class="day-date">${esc(d)}</span>
+          <span class="num">${arr.length} 篇</span>
+        </div>
+        <div class="day-notes">
+          ${arr.map(i => `
+            <article class="note">
+              <div class="note-top">
+                ${i.author
+                  ? `<span class="author" style="${authorStyle(i.author)}">${esc(i.author)}</span>`
+                  : `<span class="author ghost">未署名</span>`}
+                <span class="note-time">${esc(i.created_at ? fmtDate(i.created_at).slice(5) : '')}</span>
+                ${actionsHTML([i.id])}
+              </div>
+              ${i.category === null && i.title ? `<h3>${esc(i.title)}</h3>` : ''}
+              ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
+              ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" data-zoom></div>`).join('')}
+            </article>`).join('')}
+        </div>
+      </section>`).join('');
+  }
+
+  /* ---------------- 时光轴 ---------------- */
+  function renderTimeline(items) {
+    const list = items.filter(i => i.category === 'timeline' || i.category === null)
+                      .sort((a, b) => keyOf(b).localeCompare(keyOf(a))
+                                   || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    $('count').textContent = list.length ? list.length + ' 条' : '';
+    if (!list.length) return emptyBox('时间轴还是空的', conf.tip);
+
+    return `<div class="timeline">` + list.map(i => `
+      <div class="tl-item">
+        <div class="item-top">
+          <span class="dot-date">${esc(i.stamp || fmtDate(i.created_at) || ('#' + i.id))}</span>
+          ${actionsHTML([i.id])}
+        </div>
+        ${i.category === null && i.title ? `<h3>${esc(i.title)}</h3>` : ''}
+        ${i.text ? `<p class="txt">${esc(i.text)}</p>` : ''}
+        ${i.images.map(u => `<div class="thumb"><img src="${esc(u)}" alt="" loading="lazy" data-zoom></div>`).join('')}
+      </div>`).join('') + `</div>`;
+  }
+
+  /* ---------------- 图片放大（可左右翻） ---------------- */
+  let zoomList = [], zoomIdx = 0;
+  function paintZoom() {
+    $('lightboxImg').src = zoomList[zoomIdx] || '';
+    $('lbCount').textContent = zoomList.length > 1 ? (zoomIdx + 1) + ' / ' + zoomList.length : '';
+  }
+  function zoom(src, list) {
+    zoomList = (list && list.length) ? list : [src];
+    zoomIdx = Math.max(0, zoomList.indexOf(src));
+    paintZoom();
+    $('lightbox').classList.add('on');
+  }
+  function step(d) {
+    if (zoomList.length < 2) return;
+    zoomIdx = (zoomIdx + d + zoomList.length) % zoomList.length;
+    paintZoom();
+  }
+  function closeZoom() {
+    $('lightbox').classList.remove('on');
+    $('lightboxImg').src = '';
+    zoomList = [];
+  }
+  $('lightbox').addEventListener('click', e => { if (!e.target.closest('.lb-nav')) closeZoom(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeZoom();
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+  });
+
+  /* ================= 表单（添加 / 修改共用） ================= */
+  let imgs = [];          // 相册：当前这一组的所有图片（data URL 或链接）
+  let mode = 'add';       // add | edit
+  let editingId = null;
+  let pendingDel = null;  // 缺密码时先记下要删的 id
+
+  function formHTML() {
+    if (type === 'album') {
+      return `
+        <label class="lbl">选择图片（可多选，会自动压缩）</label>
+        <label class="file-box">📷 点这里选照片<input id="f-files" type="file" accept="image/*" multiple></label>
+        <label class="lbl">或者给个图片链接（回车加入）</label>
+        <input id="f-links" class="form-input" placeholder="https://...jpg">
+        <label class="lbl">说明标签（同一标签的照片会归到同一块）</label>
+        <input id="f-label" class="form-input" placeholder="比如：2026 秋天的公园">
+        <div class="thumbs" id="f-previews"></div>`;
+    }
+    if (type === 'diary') {
+      return `
+        <label class="lbl">日期</label>
+        <input id="f-when" class="form-input" type="date" value="${todayStr()}">
+        <label class="lbl">作者</label>
+        <input id="f-author" class="form-input" list="authors" placeholder="这篇是谁写的？比如 lzl / cyq">
+        <label class="lbl">想说的话</label>
+        <textarea id="f-content" class="form-input" placeholder="今天想说点什么…"></textarea>`;
+    }
+    return `
+      <label class="lbl">时间点</label>
+      <input id="f-when" class="form-input" type="datetime-local" value="${nowStr()}">
+      <label class="lbl">发生了什么</label>
+      <textarea id="f-content" class="form-input" placeholder="记下这个时间点的事…"></textarea>`;
+  }
+
+  function renderPreviews() {
+    const box = $('f-previews');
+    if (!box) return;
+    box.innerHTML = imgs.map((u, i) =>
+      `<span class="thumb-wrap"><img src="${esc(u)}" alt=""><button type="button" class="rm" data-rm="${i}" title="从这一组里移除">✕</button></span>`
+    ).join('');
+  }
+
+  function albumSizeHint() {
+    if (type !== 'album') return;
+    setHint(imgs.length ? `这一组共 ${imgs.length} 张，约 ${Math.round(imgs.join('').length / 1024)} KB` : '');
+  }
+
+  function addLinks(raw) {
+    const urls = String(raw || '').split(/[\s\n,，]+/).map(s => s.trim())
+      .filter(s => /^https?:\/\//.test(s) || /^data:image\//.test(s))
+      .filter(s => !imgs.includes(s));
+    if (!urls.length) return false;
+    imgs.push(...urls);
+    renderPreviews();
+    albumSizeHint();
+    return true;
+  }
+
+  function bindForm() {
+    if (type !== 'album') return;
+    $('f-files').addEventListener('change', async e => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      setHint(`正在压缩 ${files.length} 张图片…`);
+      for (const f of files) {
+        try { imgs.push(await compress(f)); } catch (err) { console.warn('压缩失败', err); }
+      }
+      $('f-files').value = '';
+      renderPreviews();
+      albumSizeHint();
+    });
+    const addNow = () => { if (addLinks($('f-links').value)) $('f-links').value = ''; };
+    $('f-links').addEventListener('change', addNow);
+    $('f-links').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNow(); } });
+    renderPreviews();
+  }
+
+  function resetForm() {
+    mode = 'add'; editingId = null; imgs = [];
+    $('formTitle').textContent = '添加' + conf.title.replace(/^\S+\s*/, '');
+    $('submitBtn').textContent = '保存';
+    $('cancelBtn').hidden = true;
+    $('addPanel').classList.remove('editing');
     $('formFields').innerHTML = formHTML();
-    $('formTitle').textContent = '添加' + conf.title.replace(/^\S+\s/, '');
-    $('adminPwd').value = sessionStorage.getItem(AKEY) || '';
+    bindForm();
+    setHint('');
+  }
+
+  function toggleForm() {
+    const p = $('addPanel');
+    if (p.hidden) {
+      p.hidden = false;
+      $('addBtn').textContent = '收起';
+      p.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      p.hidden = true;
+      $('addBtn').textContent = '＋ 添加';
+      if (mode === 'edit') resetForm();
+    }
+  }
+
+  function startEdit(id) {
+    const it = ITEMS.get(id);
+    if (!it) return;
+    mode = 'edit'; editingId = id;
+    $('addPanel').hidden = false;
+    $('addPanel').classList.add('editing');
+    $('addBtn').textContent = '收起';
+    $('formTitle').textContent = '修改这条内容';
+    $('submitBtn').textContent = '保存修改';
+    $('cancelBtn').hidden = false;
+    setHint(it.category === null ? `这条是早期记录（${it.title}），保存后会归入本分区` : '');
 
     if (type === 'album') {
-      $('f-files').addEventListener('change', async e => {
-        const files = Array.from(e.target.files || []);
-        if (!files.length) return;
-        $('formHint').textContent = `正在压缩 ${files.length} 张图片…`;
-        const out = [];
-        for (const f of files) {
-          try { out.push(await compress(f)); } catch (err) { console.warn('压缩失败', err); }
-        }
-        chosen = out;
-        $('f-previews').innerHTML = out.map(u => `<img src="${u}" alt="">`).join('');
-        const kb = Math.round(out.join('').length / 1024);
-        $('formHint').textContent = `已选择 ${out.length} 张，压缩后约 ${kb} KB`;
+      imgs = it.images.slice();
+      $('f-label').value = it.label || '';
+      renderPreviews();
+      if (it.ids || imgs.length) albumSizeHint();
+    } else if (type === 'diary') {
+      $('f-when').value = it.stamp || ymd(it.created_at) || todayStr();
+      $('f-author').value = it.author || localStorage.getItem(LAST_AUTHOR) || '';
+      $('f-content').value = it.text || '';
+    } else {
+      $('f-when').value = (it.stamp || fmtDate(it.created_at) || nowStr()).replace(' ', 'T');
+      $('f-content').value = it.text || '';
+    }
+    $('addPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function cancelEdit() {
+    resetForm();
+    $('addPanel').hidden = true;
+    $('addBtn').textContent = '＋ 添加';
+    toast('已取消修改');
+  }
+
+  async function submitEntry() {
+    const pwd = $('adminPwd').value.trim();
+    if (!pwd) return setHint('请先填管理密码', true);
+
+    const payload = { category: type };
+    if (type === 'album') {
+      const raw = $('f-links').value;
+      if (raw) { addLinks(raw); $('f-links').value = ''; }
+      if (!imgs.length) return setHint('请先选照片，或粘一个图片链接', true);
+      payload.label = $('f-label').value.trim();
+      payload.content = imgs.join('\n');
+    } else if (type === 'diary') {
+      payload.when = $('f-when').value;
+      payload.author = $('f-author').value.trim();
+      payload.content = $('f-content').value.trim();
+      if (!payload.author) return setHint('请填一下作者', true);
+      if (!payload.content) return setHint('写点什么再保存吧', true);
+    } else {
+      payload.when = ($('f-when').value || '').replace('T', ' ');
+      payload.content = $('f-content').value.trim();
+      if (!payload.content) return setHint('写点什么再保存吧', true);
+    }
+    if (payload.content.length > 3.4 * 1024 * 1024) {
+      return setHint('这次内容太大了（超过 3.4MB），请少选几张图片分几次添加', true);
+    }
+
+    const editing = mode === 'edit';
+    $('submitBtn').disabled = true;
+    setHint('正在保存…');
+    try {
+      const r = await fetch(editing ? '/api/entries/' + editingId : '/api/entries', {
+        method: editing ? 'PUT' : 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-password': pwd,
+          'x-view-password': sessionStorage.getItem(KEY) || ''
+        },
+        body: JSON.stringify(payload)
       });
-    }
+      let data = null;
+      try { data = await r.json(); } catch (e) {}
+      if (!r.ok) {
+        const msg = r.status === 401
+          ? '管理密码不对'
+          : ((data && (data.message || data.error)) || ('HTTP ' + r.status));
+        throw new Error(msg);
+      }
 
-    function toggleForm() {
-      const p = $('addPanel');
-      p.hidden = !p.hidden;
-      if (!p.hidden) {
-        $('addBtn').textContent = '收起';
-        $('formHint').textContent = '';
-        p.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      sessionStorage.setItem(AKEY, pwd);
+      if (type === 'diary') {
+        try { localStorage.setItem(LAST_AUTHOR, payload.author); } catch (e) {}
+      }
+      if (editing) {
+        toast('已保存修改 ✨');
+      } else if (data.action === 'appended') {
+        toast(type === 'album' ? '已并入同一组照片 ✨' : '已并入同一个时间点 ✨');
       } else {
-        $('addBtn').textContent = '＋ 添加';
+        toast(type === 'diary' ? '写好了 ✨' : '添加成功 ✨');
       }
+
+      resetForm();
+      $('addPanel').hidden = true;
+      $('addBtn').textContent = '＋ 添加';
+      await refresh();
+    } catch (err) {
+      setHint('失败：' + err.message, true);
+    } finally {
+      $('submitBtn').disabled = false;
+    }
+  }
+
+  /* ================= 删除 ================= */
+  async function delItems(ids) {
+    const it = ITEMS.get(ids[0]);
+    const name = ids.length > 1
+      ? `「${(it && (it.label || it.title)) || '这一组'}」整组（${ids.length} 条记录）`
+      : `「${(it && (it.label || it.title)) || '这条内容'}」`;
+    if (!confirm(`确定删除 ${name} 吗？\n删掉就找不回来了。`)) return;
+
+    const pwd = sessionStorage.getItem(AKEY) || $('adminPwd').value.trim();
+    if (!pwd) {
+      pendingDel = ids;
+      $('addPanel').hidden = false;
+      $('addBtn').textContent = '收起';
+      $('adminPwd').focus();
+      return setHint('删除需要管理密码：在下面输入一次，会自动继续删除', true);
     }
 
-    // 本地图片压缩成 JPEG data URL（长边最多 1280px）
-    let chosen = [];
-    function compress(file, maxSide = 1280, quality = 0.82) {
-      return new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onerror = reject;
-        fr.onload = () => {
-          const img = new Image();
-          img.onerror = reject;
-          img.onload = () => {
-            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-            const w = Math.max(1, Math.round(img.width * scale));
-            const h = Math.max(1, Math.round(img.height * scale));
-            const cv = document.createElement('canvas');
-            cv.width = w; cv.height = h;
-            cv.getContext('2d').drawImage(img, 0, 0, w, h);
-            let q = quality, out = cv.toDataURL('image/jpeg', q);
-            while (out.length > 600 * 1024 && q > 0.4) { q -= 0.12; out = cv.toDataURL('image/jpeg', q); }
-            resolve(out);
-          };
-          img.src = fr.result;
-        };
-        fr.readAsDataURL(file);
-      });
-    }
-
-    async function submitEntry(ev) {
-      if (ev) ev.preventDefault();
-      const hint = $('formHint');
-      const pwd = $('adminPwd').value;
-      if (!pwd) { hint.className = 'hint err'; hint.textContent = '请先填管理密码'; return; }
-
-      let payload;
-      if (type === 'album') {
-        const links = ($('f-links').value || '').split(/[\s\n]+/).map(s => s.trim()).filter(Boolean);
-        const all = chosen.concat(links);
-        if (!all.length) { hint.className = 'hint err'; hint.textContent = '请选一张照片，或粘贴图片链接'; return; }
-        payload = { category: 'album', label: $('f-label').value, content: all.join('\n') };
-      } else {
-        const when = ($('f-when').value || '').replace('T', ' ');
-        if (!when) { hint.className = 'hint err'; hint.textContent = '请选择时间'; return; }
-        payload = { category: type, when: when, content: $('f-content').value };
-      }
-      if (payload.content.length > 3.4 * 1024 * 1024) {
-        hint.className = 'hint err';
-        hint.textContent = '这次内容太大了（超过 3.4MB），请少选几张图片分几次添加';
-        return;
-      }
-
-      $('submitBtn').disabled = true;
-      hint.className = 'hint';
-      hint.textContent = '正在保存…';
+    for (const id of ids) {
+      let r;
       try {
-        const r = await fetch('/api/entries', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-admin-password': pwd,
-            'x-view-password': sessionStorage.getItem(KEY) || ''
-          },
-          body: JSON.stringify(payload)
+        r = await fetch('/api/items/' + id, {
+          method: 'DELETE',
+          headers: { 'x-admin-password': pwd, 'x-view-password': sessionStorage.getItem(KEY) || '' }
         });
+      } catch (e) {
+        return toast('删除失败：网络错误');
+      }
+      if (!r.ok) {
+        if (r.status === 401) { sessionStorage.removeItem(AKEY); return toast('管理密码不对，请重新输入'); }
         let data = null;
         try { data = await r.json(); } catch (e) {}
-        if (!r.ok) {
-          const msg = r.status === 401 ? '管理密码不对' : ((data && (data.message || data.error)) || ('HTTP ' + r.status));
-          throw new Error(msg);
-        }
-        sessionStorage.setItem(AKEY, pwd);
-        toast(data.action === 'appended' ? '已并入同一个时间点 ✨' : '添加成功 ✨');
-        // 清空表单（不同分区的字段不一样，逐个判断）
-        if (type === 'album') {
-          chosen = [];
-          if ($('f-previews')) $('f-previews').innerHTML = '';
-          if ($('f-files')) $('f-files').value = '';
-          if ($('f-links')) $('f-links').value = '';
-          if ($('f-label')) $('f-label').value = '';
-        } else {
-          if ($('f-content')) $('f-content').value = '';
-          if ($('f-when')) $('f-when').value = (type === 'diary' ? todayStr() : nowStr());
-        }
-        hint.textContent = '';
-        await refresh();
-      } catch (err) {
-        hint.className = 'hint err';
-        hint.textContent = '失败：' + err.message;
-      } finally {
-        $('submitBtn').disabled = false;
+        return toast('删除失败：' + ((data && (data.message || data.error)) || ('HTTP ' + r.status)));
       }
     }
+    sessionStorage.setItem(AKEY, pwd);
+    toast(ids.length > 1 ? `已删除整组（${ids.length} 条）` : '已删除 🗑');
+    await refresh();
+  }
 
-    /* ---------------- 渲染整页 ---------------- */
-    async function refresh() {
-      const items = await getItems();
-      if (!items) return;
-      $('body').innerHTML = type === 'album' ? renderAlbum(items)
-                          : type === 'timeline' ? renderTimeline(items)
-                          : renderDiary(items);
+  /* ================= 事件代理 ================= */
+  document.addEventListener('click', e => {
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      imgs.splice(Number(rm.dataset.rm), 1);
+      renderPreviews();
+      albumSizeHint();
+      return;
     }
+    const act = e.target.closest('[data-act]');
+    if (act) {
+      const ids = act.dataset.ids.split(',').filter(Boolean).map(Number);
+      if (act.dataset.act === 'edit') startEdit(ids[0]);
+      else if (act.dataset.act === 'del') delItems(ids);
+      return;
+    }
+    const im = e.target.closest('[data-zoom]');
+    if (im) {
+      const box = im.closest('.group-photos, .day-notes, .timeline, .wrap') || document;
+      zoom(im.src, [...box.querySelectorAll('[data-zoom]')].map(x => x.src));
+    }
+  });
 
-    (async function init() {
-      if (!sessionStorage.getItem(KEY)) return location.replace('/');
-      try {
-        await refresh();
-      } catch (err) {
-        $('body').innerHTML = `<div class="empty"><span class="big">😢</span><p class="err">加载失败：${esc(err.message)}</p></div>`;
-      }
-    })();
+  /* ================= 图片压缩（长边最多 1280px） ================= */
+  function compress(file, maxSide = 1280, quality = 0.82) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = reject;
+      fr.onload = () => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          cv.getContext('2d').drawImage(img, 0, 0, w, h);
+          let q = quality, out = cv.toDataURL('image/jpeg', q);
+          while (out.length > 600 * 1024 && q > 0.4) { q -= 0.12; out = cv.toDataURL('image/jpeg', q); }
+          resolve(out);
+        };
+        img.src = fr.result;
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  /* ================= 渲染整页 ================= */
+  function loadAuthors(items) {
+    const set = new Set(authors);
+    items.forEach(i => { if (i.author) set.add(i.author); });
+    const last = localStorage.getItem(LAST_AUTHOR);
+    if (last) set.add(last);
+    authors = [...set].filter(Boolean);
+    $('authors').innerHTML = authors.map(a => `<option value="${esc(a)}">`).join('');
+  }
+
+  async function refresh() {
+    const items = await getItems();
+    if (!items) return;
+    ITEMS = new Map(items.map(i => [i.id, i]));
+    loadAuthors(items);
+    $('body').innerHTML = type === 'album' ? renderAlbum(items)
+                        : type === 'timeline' ? renderTimeline(items)
+                        : renderDiary(items);
+  }
+
+  /* ================= 初始化 ================= */
+  $('adminPwd').value = sessionStorage.getItem(AKEY) || '';
+  $('adminPwd').addEventListener('change', () => {
+    const v = $('adminPwd').value.trim();
+    if (v) sessionStorage.setItem(AKEY, v);
+    if (v && pendingDel) { const ids = pendingDel; pendingDel = null; setHint(''); delItems(ids); }
+  });
+  resetForm();
+  $('addPanel').hidden = true;
+  $('addBtn').textContent = '＋ 添加';
+
+  (async function init() {
+    if (!sessionStorage.getItem(KEY)) return location.replace('/');
+    try {
+      await refresh();
+    } catch (err) {
+      $('body').innerHTML = `<div class="empty"><span class="big">😢</span><p class="err">加载失败：${esc(err.message)}</p></div>`;
+    }
+  })();
   </script>
 </body>
 </html>

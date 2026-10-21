@@ -102,68 +102,109 @@ app.get('/api/items', requireView, requireDb, async (req, res) => {
 });
 
 /* ============================================================
-   分区内容的「添加」接口
+   分区内容的「添加 / 修改 / 删除」接口
    —— 数据仍是同一张 items 表，用 title 前缀标记属于哪个分区：
-        [相片] <说明标签>        content = 图片（每行一个）
-        [日记] <YYYY-MM-DD>      content = 话语
-        [时光轴] <YYYY-MM-DD HH:mm>  content = 事件
-   —— 只做「添加式修改」：同一个时间点/同一个标签 → 追加到已有记录，
-      不新建、也不提供删除。
+        [相片] <说明标签>               content = 图片（每行一个）
+        [日记] <YYYY-MM-DD> @<作者>     content = 话语（同一天可以写多篇，各自独立）
+        [时光轴] <YYYY-MM-DD HH:mm>     content = 事件
+   —— 添加时的合并规则：相册同标签、时光轴同时间点 → 追加到已有记录；
+      日记永远新建（一天可以写多篇）。
+      修改走 PUT /api/entries/:id（整体替换，不做追加）；删除走 DELETE /api/items/:id
    ============================================================ */
 const MARKERS = { album: '相片', diary: '日记', timeline: '时光轴' };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
-app.post('/api/entries', requireAdmin, requireDb, async (req, res) => {
-  const { category, label, content, when } = req.body || {};
+// 把请求体组装成 title / content；出错时直接回 400（或 413）并返回 null
+function buildEntry(req, res) {
+  const { category, label, content, when, author } = req.body || {};
 
   if (!MARKERS[category]) {
-    return res.status(400).json({ error: 'bad category', message: '分区类型不对' });
+    res.status(400).json({ error: 'bad category', message: '分区类型不对' });
+    return null;
   }
   const body = String(content || '').trim();
   if (!body) {
-    return res.status(400).json({ error: 'content required', message: '内容不能为空' });
+    res.status(400).json({ error: 'content required', message: '内容不能为空' });
+    return null;
   }
   if (body.length > 4 * 1024 * 1024) {
-    return res.status(413).json({ error: 'too large', message: '内容太大了，请少选几张图片' });
+    res.status(413).json({ error: 'too large', message: '内容太大了，请少选几张图片' });
+    return null;
   }
 
-  let title;
   if (category === 'album') {
-    title = `[相片] ${String(label || '').trim() || '照片'}`;
-  } else if (category === 'diary') {
-    const d = String(when || '').trim();
-    if (!DATE_RE.test(d)) return res.status(400).json({ error: 'bad date', message: '请选择日期（YYYY-MM-DD）' });
-    title = `[日记] ${d}`;
-  } else {
-    const t = String(when || '').trim();
-    if (!DATETIME_RE.test(t)) return res.status(400).json({ error: 'bad time', message: '请选择时间点（YYYY-MM-DD HH:mm）' });
-    title = `[时光轴] ${t}`;
+    const l = String(label || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60);
+    return { category, title: `[相片] ${l || '照片'}`, content: body };
   }
+  if (category === 'diary') {
+    const d = String(when || '').trim();
+    if (!DATE_RE.test(d)) {
+      res.status(400).json({ error: 'bad date', message: '请选择日期（YYYY-MM-DD）' });
+      return null;
+    }
+    const a = String(author || '').replace(/[\r\n[\]]/g, '').trim().slice(0, 24);
+    if (!a) {
+      res.status(400).json({ error: 'author required', message: '请填写作者' });
+      return null;
+    }
+    return { category, title: `[日记] ${d} @${a}`, content: body };
+  }
+  const t = String(when || '').trim();
+  if (!DATETIME_RE.test(t)) {
+    res.status(400).json({ error: 'bad time', message: '请选择时间点（YYYY-MM-DD HH:mm）' });
+    return null;
+  }
+  return { category, title: `[时光轴] ${t}`, content: body };
+}
 
-  // 同一个时间点（或同一个相册标签）已存在 → 追加，而不是新建
-  const { data: existRows, error: findErr } = await supabase
-    .from('items')
-    .select('id,content')
-    .eq('title', title)
-    .limit(1);
-  if (findErr) return res.status(500).json(findErr);
+app.post('/api/entries', requireAdmin, requireDb, async (req, res) => {
+  const entry = buildEntry(req, res);
+  if (!entry) return;
 
-  if (existRows && existRows.length) {
-    const row = existRows[0];
-    const merged = [String(row.content || '').trim(), body].filter(Boolean).join('\n');
-    const { error: upErr } = await supabase.from('items').update({ content: merged }).eq('id', row.id);
-    if (upErr) return res.status(500).json(upErr);
-    return res.json({ ok: true, action: 'appended', id: row.id, title });
+  // 日记：一天可以写多篇 —— 永远新建，不合并到已有记录
+  if (entry.category !== 'diary') {
+    // 同一个时间点（或同一个相册标签）已存在 → 追加，而不是新建
+    const { data: existRows, error: findErr } = await supabase
+      .from('items')
+      .select('id,content')
+      .eq('title', entry.title)
+      .limit(1);
+    if (findErr) return res.status(500).json(findErr);
+
+    if (existRows && existRows.length) {
+      const row = existRows[0];
+      const merged = [String(row.content || '').trim(), entry.content].filter(Boolean).join('\n');
+      const { error: upErr } = await supabase.from('items').update({ content: merged }).eq('id', row.id);
+      if (upErr) return res.status(500).json(upErr);
+      return res.json({ ok: true, action: 'appended', id: row.id, title: entry.title });
+    }
   }
 
   const { data, error } = await supabase
     .from('items')
-    .insert({ title, content: body })
+    .insert({ title: entry.title, content: entry.content })
     .select()
     .single();
   if (error) return res.status(500).json(error);
-  res.json({ ok: true, action: 'created', id: data.id, title });
+  res.json({ ok: true, action: 'created', id: data.id, title: entry.title });
+});
+
+// 修改某条内容（需管理密码）—— 整体替换，不做追加
+app.put('/api/entries/:id', requireAdmin, requireDb, async (req, res) => {
+  const entry = buildEntry(req, res);
+  if (!entry) return;
+
+  const { data, error } = await supabase
+    .from('items')
+    .update({ title: entry.title, content: entry.content })
+    .eq('id', req.params.id)
+    .select();
+  if (error) return res.status(500).json(error);
+  if (!data || !data.length) {
+    return res.status(404).json({ error: 'not found', message: '这条内容已经不在了（可能刚被删过）' });
+  }
+  res.json({ ok: true, action: 'updated', id: data[0].id, title: entry.title });
 });
 
 // 新增（需管理密码）
