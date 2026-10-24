@@ -781,3 +781,271 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
   .btn-export { width: 100%; justify-content: center; }
   .btn-export-alt { width: 100%; margin: .6rem 0 0; }
 }
+
+/* ==========================================================
+   首页 · AI 阶段小结
+   ========================================================== */
+
+.ai-card {
+  max-width: 820px;
+  margin: 0 auto 3.2rem;
+  padding: 1.55rem 1.5rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #fcfbf7 0%, #fff 62%);
+  box-shadow: var(--shadow-sm);
+}
+
+/* hidden 属性优先于下面的 display（否则 flex/block 会把它顶掉） */
+.ai-card [hidden] { display: none !important; }
+
+.ai-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--green-deep);
+  letter-spacing: .02em;
+}
+
+.ai-spark {
+  display: inline-block;
+  margin-right: .15rem;
+  animation: aiTwinkle 2.6s ease-in-out infinite;
+}
+
+@keyframes aiTwinkle {
+  0%, 100% { opacity: .75; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.14); }
+}
+
+.ai-sub {
+  margin: .5rem 0 0;
+  color: var(--muted);
+  font-size: .855rem;
+  line-height: 1.8;
+}
+
+/* ---- Key 输入条 ---- */
+.ai-keybar {
+  display: flex;
+  gap: .55rem;
+  align-items: stretch;
+  margin-top: 1.15rem;
+}
+
+.ai-keybar input {
+  flex: 1;
+  min-width: 0;
+  padding: .72rem .95rem;
+  border: 1px solid rgba(47, 93, 63, .18);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .87rem;
+  letter-spacing: .02em;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.ai-keybar input::placeholder { color: #a9b6ac; font-family: inherit; }
+.ai-keybar input:focus {
+  border-color: rgba(47, 93, 63, .5);
+  box-shadow: 0 0 0 3px rgba(47, 93, 63, .09);
+}
+
+.btn-ai-key {
+  flex: none;
+  padding: 0 1.15rem;
+  border: 1px solid rgba(47, 93, 63, .34);
+  border-radius: 12px;
+  background: var(--green-soft);
+  color: var(--green-deep);
+  font-family: inherit;
+  font-size: .88rem;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+
+.btn-ai-key:hover { background: #dbeada; border-color: rgba(47, 93, 63, .5); }
+
+.ai-keyhint {
+  margin: .65rem 0 0;
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.8;
+}
+
+.ai-keyhint b { color: var(--green); font-weight: 600; }
+.ai-keyhint a { color: var(--green); text-decoration: none; border-bottom: 1px solid rgba(74, 124, 89, .35); }
+.ai-keyhint a:hover { border-bottom-color: var(--green); }
+
+.ai-keymini {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  flex-wrap: wrap;
+  margin-top: 1.05rem;
+  padding: .6rem .85rem;
+  border: 1px dashed rgba(47, 93, 63, .2);
+  border-radius: 12px;
+  background: rgba(231, 240, 230, .5);
+  font-size: .82rem;
+  color: var(--body-text);
+}
+
+.ai-keymini-txt code {
+  padding: .1rem .35rem;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--green-deep);
+  font-size: .8rem;
+  letter-spacing: .03em;
+}
+
+.ai-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--green);
+  font-family: inherit;
+  font-size: .82rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(74, 124, 89, .35);
+}
+
+.ai-link:hover { text-decoration-color: var(--green); }
+
+/* ---- 生成按钮 ---- */
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+}
+
+.btn-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .76rem 1.5rem;
+  border: 1px solid #b9862c;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #e0b458, var(--gold));
+  color: #4a3308;
+  font-family: inherit;
+  font-size: .96rem;
+  letter-spacing: .02em;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(217, 164, 65, .22);
+  transition: transform .2s, box-shadow .22s, opacity .2s;
+}
+
+.btn-ai .ico { font-size: 1.02rem; line-height: 1; }
+.btn-ai:hover { transform: translateY(-2px); box-shadow: 0 9px 22px rgba(217, 164, 65, .3); }
+.btn-ai:active { transform: translateY(0); }
+.btn-ai:disabled { opacity: .68; cursor: default; transform: none; }
+
+.ai-status { color: var(--muted); font-size: .83rem; line-height: 1.7; }
+
+.ai-err {
+  margin: .95rem 0 0;
+  padding: .7rem .95rem;
+  border: 1px solid rgba(162, 69, 60, .16);
+  border-radius: 12px;
+  background: #fdf3f2;
+  color: #a2453c;
+  font-size: .845rem;
+  line-height: 1.75;
+}
+
+/* ---- 小结输出区 ---- */
+.ai-out {
+  margin-top: 1.35rem;
+  padding: 1.2rem 1.15rem 1.1rem;
+  border: 1px dashed rgba(217, 164, 65, .48);
+  border-radius: 16px;
+  background: #fffdf6;
+}
+
+.ai-out-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: .9rem;
+  flex-wrap: wrap;
+  padding-bottom: .75rem;
+  margin-bottom: .95rem;
+  border-bottom: 1px dashed rgba(217, 164, 65, .34);
+}
+
+.ai-out-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--green-deep);
+  letter-spacing: .02em;
+}
+
+.ai-meta {
+  display: block;
+  margin-top: .28rem;
+  color: var(--muted);
+  font-size: .755rem;
+  letter-spacing: .02em;
+}
+
+.ai-tools { display: flex; gap: .4rem; flex-wrap: wrap; }
+
+.ai-tool {
+  padding: .36rem .78rem;
+  border: 1px solid rgba(47, 93, 63, .2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .85);
+  color: var(--green-deep);
+  font-family: inherit;
+  font-size: .79rem;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+
+.ai-tool:hover { background: var(--green-soft); border-color: rgba(47, 93, 63, .38); }
+
+.ai-text {
+  color: var(--body-text);
+  font-size: .955rem;
+  line-height: 2.05;
+  letter-spacing: .01em;
+}
+
+.ai-text p { margin: 0 0 .95rem; }
+.ai-text p:last-child { margin-bottom: 0; }
+
+.ai-text h4 {
+  margin: 1.15rem 0 .5rem;
+  font-size: .97rem;
+  color: var(--green-deep);
+}
+
+.ai-text h4:first-child { margin-top: 0; }
+
+/* 打字机光标 */
+.ai-text.is-typing:not(:empty)::after {
+  content: '▍';
+  margin-left: .1rem;
+  color: var(--gold);
+  animation: aiCaret 1.05s steps(1) infinite;
+}
+
+@keyframes aiCaret { 50% { opacity: 0; } }
+
+@media (max-width: 520px) {
+  .ai-card { margin: 0 auto 2.4rem; padding: 1.3rem 1.05rem 1.25rem; }
+  .ai-keybar { flex-direction: column; }
+  .btn-ai-key { padding: .68rem 1rem; }
+  .btn-ai { width: 100%; justify-content: center; }
+  .ai-actions { gap: .6rem; }
+  .ai-out { padding: 1rem .9rem .9rem; }
+  .ai-tool { font-size: .76rem; padding: .34rem .68rem; }
+}

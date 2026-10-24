@@ -70,6 +70,50 @@
       <button class="btn-export-alt" id="exportTxtBtn" type="button">只要文字版</button>
       <p class="export-hint" id="exportHint">把相片、日记、时光轴整理成一份 .md 文件，存到你这台设备上</p>
     </div>
+
+    <!-- ================= AI 阶段小结 ================= -->
+    <section class="ai-card" id="aiCard">
+      <div class="ai-head">
+        <h2><span class="ai-spark">✨</span> AI 阶段小结</h2>
+        <p class="ai-sub">把「时光轴的全部内容 + 最近的 15 篇日记」交给 AI，读一段只属于你们的总结与鼓励</p>
+      </div>
+
+      <div class="ai-keybar" id="aiKeyBar">
+        <input id="aiKey" type="password" placeholder="粘贴阿里云百炼的 API Key（sk- 开头）" autocomplete="off" spellcheck="false">
+        <button class="btn-ai-key" id="aiKeySave" type="button">记住</button>
+      </div>
+      <p class="ai-keyhint" id="aiKeyHint">
+        只需要输一次，之后自动记住（<b>只存在你这台设备的浏览器里</b>，不会上传到本站服务器，也不会写进数据库）·
+        <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">去百炼控制台拿 Key</a>
+      </p>
+      <div class="ai-keymini" id="aiKeyMini" hidden>
+        <span class="ai-keymini-txt">🔑 已记住 Key：<code id="aiKeyMask"></code></span>
+        <button class="ai-link" id="aiKeyChange" type="button">换一个</button>
+        <button class="ai-link" id="aiKeyForget" type="button">清除</button>
+      </div>
+
+      <div class="ai-actions">
+        <button class="btn-ai" id="aiBtn" type="button"><span class="ico">✨</span><span id="aiBtnTxt">生成总结</span></button>
+        <span class="ai-status" id="aiStatus"></span>
+      </div>
+
+      <p class="ai-err" id="aiErr" hidden></p>
+
+      <article class="ai-out" id="aiOut" hidden>
+        <div class="ai-out-head">
+          <div class="ai-out-title">
+            <h3>我们的阶段小结</h3>
+            <span class="ai-meta" id="aiMeta"></span>
+          </div>
+          <div class="ai-tools">
+            <button class="ai-tool" id="aiCopy" type="button">复制</button>
+            <button class="ai-tool" id="aiSave" type="button">存成 .md</button>
+            <button class="ai-tool" id="aiAgain" type="button">重新生成</button>
+          </div>
+        </div>
+        <div class="ai-text" id="aiTextBox"></div>
+      </article>
+    </section>
   </div>
 
   <script>
@@ -318,6 +362,311 @@
 
     $('exportBtn').addEventListener('click', () => exportData(true));
     $('exportTxtBtn').addEventListener('click', () => exportData(false));
+
+    /* ================= AI 阶段小结 =================
+       · 材料：时光轴的全部内容 + 日记最近 15 篇（走已有的 ?type= 接口，只取文字，合计几 KB）
+       · 模型：阿里云百炼 DashScope 的 OpenAI 兼容接口 · deepseek-v4.1-flash
+       · Key ：只存在你自己的浏览器里（localStorage），请求由浏览器直接发往百炼，不经过本站后端
+       =============================================== */
+    const AI_URL    = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+    const AI_MODEL  = 'deepseek-v4.1-flash';
+    const AI_LKEY   = 'bailian_api_key';     // localStorage：百炼 API Key
+    const AI_LCACHE = 'ai_summary_last';     // localStorage：上一次生成的小结
+    const AI_DAYS   = 15;                    // 日记取最近多少篇
+    const AI_MIN    = 600;                   // 期望的最少字数（用于提示，不拦截）
+
+    let aiKv = '';           // 没点「记住」时，Key 只留在内存里
+    let aiNoThink = true;    // 先带 enable_thinking:false（省 token、更快）；模型不认就自动去掉重试
+    let aiBusy = false;
+
+    const aiEsc = s => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const aiKeyNow = () => (($('aiKey').value || '').trim() || localStorage.getItem(AI_LKEY) || aiKv || '').trim();
+    const aiStatus = t => { $('aiStatus').textContent = t || ''; };
+    const aiError  = t => { const el = $('aiErr'); el.textContent = t || ''; el.hidden = !t; };
+    const aiMask   = k => !k ? '' : (k.length <= 12 ? k.slice(0, 4) + '••••' : k.slice(0, 6) + '••••' + k.slice(-4));
+
+    /* ---------- 材料：时光轴全部 + 日记最近 15 篇 ---------- */
+    async function aiFetch(type) {
+      const res = await fetch('/api/items?type=' + type, {
+        headers: { 'x-view-password': sessionStorage.getItem(KEY) || '' }
+      });
+      if (res.status === 401) { sessionStorage.removeItem(KEY); showLock('登录已失效，请重新输入密码'); return null; }
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data)) {
+        throw new Error((data && (data.message || data.error)) || ('取数据失败 HTTP ' + res.status));
+      }
+      return data;
+    }
+
+    async function aiGather() {
+      const [tl, dy] = await Promise.all([aiFetch('timeline'), aiFetch('diary')]);
+      if (!tl || !dy) return null;
+      const when = r => r.stamp || fmtTime(r.created_at) || fmtDay(r.created_at) || '';
+      const times = tl.map(rowOf).filter(r => r.text || r.images.length)
+        .sort((a, b) => when(a).localeCompare(when(b)));                       // 早 → 晚
+      const diaries = dy.map(rowOf)
+        .sort((a, b) => when(b).localeCompare(when(a))
+                     || String(b.created_at || '').localeCompare(String(a.created_at || '')))
+        .slice(0, AI_DAYS);                                                   // 最新 15 篇
+      return { times, diaries };
+    }
+
+    function aiPrompt(times, diaries) {
+      const row = (r, i) => {
+        const t = String(r.text || '').replace(/\s*\n\s*/g, ' / ').trim();
+        const who = r.author ? '（' + r.author + '）' : '';
+        return `${i + 1}. ${r.stamp || fmtTime(r.created_at) || fmtDay(r.created_at) || '未标时间'}${who} — `
+          + (t || '（没有留下文字，只有照片）');
+      };
+      const L = [];
+      L.push('【时光轴 · 全部内容，按时间从早到晚】');
+      L.push(times.length ? times.map(row).join('\n') : '（暂无）');
+      L.push('');
+      L.push(`【心情日记 · 最近 ${diaries.length} 篇，日期新的在前】`);
+      L.push(diaries.length ? diaries.map(row).join('\n') : '（暂无）');
+      L.push('');
+      L.push('【写作要求】');
+      L.push(`1. 写一篇不少于 ${AI_MIN} 字、不超过 900 字的中文小结，用第二人称「你们」。`);
+      L.push('2. 分 3～5 个自然段，每段可以有一个很短的小标题（比如「这段日子」「心情的转弯」「接下来」）。');
+      L.push('3. 先回顾：把这些日子串起来，写出经历过什么、心情如何变化；至少提到 3 个具体细节（日期、事情或原话）。');
+      L.push('4. 再鼓励与展望：真诚、温暖，对接下来给一点具体的期待。');
+      L.push('5. 不要写成流水账，不要写成模板鸡汤，不要编造材料里没有的事情，不要提到「AI」或「材料」。');
+      L.push('6. 直接输出正文，不要任何前后说明。');
+      return L.join('\n');
+    }
+
+    /* ---------- 调用百炼（流式） ---------- */
+    function aiPayload(noThink, prompt) {
+      const p = {
+        model: AI_MODEL,
+        messages: [
+          { role: 'system', content: '你是一位温柔、真诚、文字功底很好的中文写作者，正在为一个情侣的私人纪念网站「我们的小天地」写一段阶段小结。你的文字要像人写的：有具体细节、有温度，不空洞、不油腻、不用网络套话。' },
+          { role: 'user', content: prompt }
+        ],
+        stream: true,
+        max_tokens: 4000,
+        temperature: 1.0
+      };
+      if (noThink) p.enable_thinking = false;
+      return p;
+    }
+
+    async function aiPost(key, prompt, signal) {
+      const call = noThink => fetch(AI_URL, {
+        method: 'POST',
+        signal,
+        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(aiPayload(noThink, prompt))
+      });
+      let res = await call(aiNoThink);
+      if (res.status === 400 && aiNoThink) {      // 万一这个模型不认 enable_thinking：去掉再试一次
+        aiNoThink = false;
+        res = await call(false);
+      }
+      return res;
+    }
+
+    function aiErrText(status, raw) {
+      let m = '';
+      try { const j = JSON.parse(raw); m = (j.error && (j.error.message || j.error.code)) || ''; } catch (e) { m = String(raw || '').slice(0, 160); }
+      if (status === 401) return 'API Key 不对或没权限（401）—— 检查有没有复制完整、是不是百炼的 Key（sk- 开头）';
+      if (status === 429) return '请求太频繁或额度不够（429）—— 等一会儿再试，或去百炼控制台看一下余额';
+      if (status === 400) return '百炼拒绝了这次请求（400）：' + (m || '参数问题，稍后再试');
+      if (status >= 500) return '百炼服务端暂时不可用（' + status + '），过一会儿再试';
+      return '调用失败（' + status + '）：' + (m || '未知错误');
+    }
+
+    /* ---------- 排版 & 交互 ---------- */
+    function aiRender(box, text) {
+      const parts = String(text).split(/\n\s*\n+/).map(s => s.trim()).filter(Boolean);
+      box.innerHTML = parts.map(p => {
+        const one = p.replace(/\n+/g, '');
+        const head = one.length <= 16 && !/[。！？!?；;，,]/.test(one);
+        return head ? '<h4>' + aiEsc(one) + '</h4>'
+                    : '<p>' + aiEsc(p).replace(/\n+/g, '<br>') + '</p>';
+      }).join('');
+    }
+
+    let aiLastFollow = 0;
+    function aiFollow(box) {
+      const now = Date.now();
+      if (now - aiLastFollow < 360) return;
+      aiLastFollow = now;
+      const r = box.getBoundingClientRect();
+      if (r.bottom > window.innerHeight) {
+        window.scrollBy({ top: Math.min(r.bottom - window.innerHeight + 28, 220), behavior: 'smooth' });
+      }
+    }
+
+    function aiFlash(id, txt) {
+      const b = $(id), old = b.textContent;
+      b.textContent = txt;
+      setTimeout(() => { b.textContent = old; }, 1400);
+    }
+
+    async function aiGenerate() {
+      if (aiBusy) return;
+      const key = aiKeyNow();
+      if (!key) {
+        aiError('先在上面粘一次百炼的 API Key（sk- 开头）—— 只需要输一次，之后会自动记住');
+        $('aiKey').focus();
+        return;
+      }
+      const btn = $('aiBtn'), box = $('aiTextBox'), out = $('aiOut');
+      aiBusy = true; aiError('');
+      btn.disabled = true; $('aiBtnTxt').textContent = '正在写…';
+      out.hidden = false; $('aiMeta').textContent = '';
+      box.textContent = ''; box.classList.add('is-typing');
+      const t0 = Date.now();
+      let ctrl = null;
+      try {
+        aiStatus('正在把你们的日记和时光轴读一遍…');
+        const data = await aiGather();
+        if (!data) return;
+        if (!data.times.length && !data.diaries.length) {
+          throw new Error('现在还没有内容可以总结 —— 先去写一点日记或时光轴吧 🌱');
+        }
+        aiStatus(`读到时光轴 ${data.times.length} 条 · 日记 ${data.diaries.length} 篇，${AI_MODEL} 正在写…`);
+        ctrl = new AbortController();
+        const guard = setTimeout(() => ctrl.abort(), 150000);
+
+        let res;
+        try {
+          res = await aiPost(key, aiPrompt(data.times, data.diaries), ctrl.signal);
+          if (!res.ok) throw new Error(aiErrText(res.status, await res.text()));
+          if (!res.body) {                                  // 万一不支持流式：退回一次性读
+            const j = await res.json();
+            const one = j.choices && j.choices[0] && (j.choices[0].message || {}).content;
+            if (!one) throw new Error('模型没有返回内容，再试一次吧');
+            box.textContent = one;
+          } else {
+            const reader = res.body.getReader(), dec = new TextDecoder();
+            let buf = '';
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              buf += dec.decode(chunk.value, { stream: true });
+              const lines = buf.split('\n');
+              buf = lines.pop() || '';
+              for (const raw of lines) {
+                const line = raw.trim();
+                if (!line.startsWith('data:')) continue;
+                const seg = line.slice(5).trim();
+                if (seg === '[DONE]') { buf = ''; break; }
+                let j; try { j = JSON.parse(seg); } catch (e) { continue; }
+                const ch = j.choices && j.choices[0];
+                const d = ch && (ch.delta || ch.message);
+                const piece = d && typeof d.content === 'string' ? d.content : '';
+                if (piece) { box.textContent += piece; aiFollow(box); }
+              }
+            }
+          }
+        } finally { clearTimeout(guard); }
+
+        const text = box.textContent.trim();
+        if (!text) throw new Error('模型没有返回内容，再试一次吧');
+        aiRender(box, text);
+        const chars = text.replace(/\s/g, '').length;
+        const secs = ((Date.now() - t0) / 1000).toFixed(1);
+        $('aiMeta').textContent = `${chars} 字 · 用时 ${secs}s · ${AI_MODEL}`;
+        localStorage.setItem(AI_LCACHE, JSON.stringify({ text, at: Date.now(), chars, model: AI_MODEL }));
+        if (!localStorage.getItem(AI_LKEY)) {              // 生成成功 → 顺手把 Key 记住
+          localStorage.setItem(AI_LKEY, key);
+          $('aiKey').value = '';
+          aiKeyView(true);
+        }
+        aiStatus(chars < AI_MIN
+          ? `写好了（${chars} 字，比要求的 ${AI_MIN} 字短一点，可以点「重新生成」再来一次）`
+          : '');
+      } catch (err) {
+        const msg = err && err.name === 'AbortError'
+          ? '等太久了（150 秒），先停下来了 —— 再试一次吧'
+          : (err && err.message) || String(err);
+        aiError(msg);
+        aiStatus('');
+        if (!box.textContent.trim()) out.hidden = true;
+      } finally {
+        box.classList.remove('is-typing');
+        btn.disabled = false; $('aiBtnTxt').textContent = '生成总结';
+        aiBusy = false;
+      }
+    }
+
+    /* ---------- Key 的显示 / 记住 / 清除 ---------- */
+    function aiKeyView(hasKey) {
+      $('aiKeyBar').hidden = !!hasKey;
+      $('aiKeyHint').hidden = !!hasKey;
+      $('aiKeyMini').hidden = !hasKey;
+      if (hasKey) $('aiKeyMask').textContent = aiMask(localStorage.getItem(AI_LKEY) || aiKv);
+    }
+
+    $('aiKeySave').addEventListener('click', () => {
+      const v = $('aiKey').value.trim();
+      if (!v) { aiError('先把 Key 粘进来再点「记住」'); $('aiKey').focus(); return; }
+      aiError('');
+      aiKv = v;
+      localStorage.setItem(AI_LKEY, v);
+      $('aiKey').value = '';
+      aiKeyView(true);
+      aiStatus('Key 已记住 ✅');
+      setTimeout(() => aiStatus(''), 2600);
+    });
+    $('aiKeyChange').addEventListener('click', () => { aiKeyView(false); $('aiKey').focus(); });
+    $('aiKeyForget').addEventListener('click', () => {
+      localStorage.removeItem(AI_LKEY); aiKv = '';
+      $('aiKey').value = ''; aiKeyView(false);
+      aiStatus('已清除本机保存的 Key'); setTimeout(() => aiStatus(''), 2600);
+    });
+
+    /* ---------- 生成 / 复制 / 存盘 / 重新生成 ---------- */
+    $('aiBtn').addEventListener('click', aiGenerate);
+    $('aiAgain').addEventListener('click', aiGenerate);
+
+    $('aiCopy').addEventListener('click', async () => {
+      const t = $('aiTextBox').innerText.trim();
+      if (!t) return;
+      try { await navigator.clipboard.writeText(t); }
+      catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e2) {}
+        ta.remove();
+      }
+      aiFlash('aiCopy', '已复制 ✓');
+    });
+
+    $('aiSave').addEventListener('click', () => {
+      const t = $('aiTextBox').innerText.trim();
+      if (!t) return;
+      const md = `# 我们的小天地 · AI 阶段小结\n\n`
+        + `> 生成时间：${fmtTime(new Date())}（本机时间）\n`
+        + `> ${$('aiMeta').textContent}\n`
+        + `> 材料：时光轴全部内容 + 最近 ${AI_DAYS} 篇心情日记\n\n---\n\n`
+        + `${t}\n\n---\n\n*由首页的「AI 阶段小结」生成*\n`;
+      const blob = new Blob(['\uFEFF' + md], { type: 'text/markdown;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `我们的小天地_AI小结_${fileStamp()}.md`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      aiFlash('aiSave', '已存成 .md ✓');
+    });
+
+    // 打开首页时，把上一次的小结显示出来；有记住的 Key 就直接折叠输入框
+    (function aiRestore() {
+      const k = localStorage.getItem(AI_LKEY) || '';
+      aiKeyView(!!k);
+      try {
+        const c = JSON.parse(localStorage.getItem(AI_LCACHE) || 'null');
+        if (c && c.text) {
+          $('aiOut').hidden = false;
+          aiRender($('aiTextBox'), c.text);
+          $('aiMeta').textContent = `${c.chars || ''} 字 · ${fmtTime(c.at)} · ${c.model || AI_MODEL}`;
+        }
+      } catch (e) {}
+    })();
 
     // ---------- 初始化 ----------
     $('lockCard').addEventListener('submit', unlock);
