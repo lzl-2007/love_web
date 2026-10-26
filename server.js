@@ -94,12 +94,15 @@ app.post('/api/login', (req, res) => {
 //   ?type=album      只要相册（title 以 [相片] 开头，带图片）
 //   ?type=diary      只要日记（[日记] 开头 + 早期没有 [分区] 标记的记录）
 //   ?type=timeline   只要时光轴（[时光轴] 开头 + 早期没有 [分区] 标记的记录）
+//   ?type=wish       只要愿望清单（[愿望] 开头；新分区，不兜底早期记录）
 //   ?ids=12,34      只要这几个 id（相册分块懒加载用）
 app.get('/api/items', requireView, requireDb, async (req, res) => {
   const { type, ids } = req.query;
   const light = req.query.light === '1';
   const sel = light ? 'id,title,created_at' : '*';
-  const PREFIX = { album: '[相片]', diary: '[日记]', timeline: '[时光轴]' }[type];
+  const PREFIX = { album: '[相片]', diary: '[日记]', timeline: '[时光轴]', wish: '[愿望]' }[type];
+  // 早期手动加的内容没有 [分区] 标记，只在日记 / 时光轴里兜底显示（愿望清单是新分区，不兜底）
+  const WITH_LEGACY = type === 'diary' || type === 'timeline';
   const idList = String(ids || '').split(',').map(s => Number(s.trim()))
     .filter(n => Number.isInteger(n) && n > 0);
 
@@ -115,8 +118,10 @@ app.get('/api/items', requireView, requireDb, async (req, res) => {
       rows = await run(supabase.from('items').select(sel).in('id', idList));
     } else if (PREFIX) {
       rows = await run(supabase.from('items').select(sel).like('title', PREFIX + '%'));
-      // 早期手动加的内容没有 [分区] 标记，相册 / 日记 / 时光轴里都照旧看得到
-      rows = rows.concat(await run(supabase.from('items').select(sel).not('title', 'like', '[%')));
+      // 早期手动加的内容没有 [分区] 标记，日记 / 时光轴里照旧看得到
+      if (WITH_LEGACY) {
+        rows = rows.concat(await run(supabase.from('items').select(sel).not('title', 'like', '[%')));
+      }
     } else {
       rows = await run(supabase.from('items').select(sel));
     }
@@ -133,17 +138,22 @@ app.get('/api/items', requireView, requireDb, async (req, res) => {
         [相片] <说明标签>               content = 图片（每行一个）
         [日记] <YYYY-MM-DD> @<作者>     content = 话语（同一天可以写多篇，各自独立）
         [时光轴] <YYYY-MM-DD HH:mm>     content = 事件
+        [愿望] <高|中|低> <未完成|已完成> [YYYY-MM-DD HH:mm]   content = 愿望内容
    —— 添加时的合并规则：相册同标签、时光轴同时间点 → 追加到已有记录；
-      日记永远新建（一天可以写多篇）。
+      日记 / 愿望永远新建（一天可以写多篇日记，一个个愿望也各自独立）。
       修改走 PUT /api/entries/:id（整体替换，不做追加）；删除走 DELETE /api/items/:id
    ============================================================ */
-const MARKERS = { album: '相片', diary: '日记', timeline: '时光轴' };
+const MARKERS = { album: '相片', diary: '日记', timeline: '时光轴', wish: '愿望' };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+// 愿望优先级：中文三档（也接受英文写法，前端只用中文）
+const WISH_PRIO = { '高': '高', '中': '中', '低': '低', high: '高', mid: '中', medium: '中', low: '低' };
+const pad2 = n => String(n).padStart(2, '0');
+const fmtStamp = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
 // 把请求体组装成 title / content；出错时直接回 400（或 413）并返回 null
 function buildEntry(req, res) {
-  const { category, label, content, when, author } = req.body || {};
+  const { category, label, content, when, author, priority, done, doneAt } = req.body || {};
 
   if (!MARKERS[category]) {
     res.status(400).json({ error: 'bad category', message: '分区类型不对' });
@@ -176,6 +186,17 @@ function buildEntry(req, res) {
     }
     return { category, title: `[日记] ${d} @${a}`, content: body };
   }
+  if (category === 'wish') {
+    const raw = String(priority || '').trim();
+    const level = WISH_PRIO[raw] || WISH_PRIO[raw.toLowerCase()] || '中';
+    const finished = done === true || done === 1 || done === '1' || done === 'true';
+    let title = `[愿望] ${level} ${finished ? '已完成' : '未完成'}`;
+    if (finished) {
+      const at = String(doneAt || '').trim().replace('T', ' ');
+      title += ' ' + (DATETIME_RE.test(at) ? at : fmtStamp(new Date()));
+    }
+    return { category, title, content: body };
+  }
   const t = String(when || '').trim();
   if (!DATETIME_RE.test(t)) {
     res.status(400).json({ error: 'bad time', message: '请选择时间点（YYYY-MM-DD HH:mm）' });
@@ -188,8 +209,8 @@ app.post('/api/entries', requireAdmin, requireDb, async (req, res) => {
   const entry = buildEntry(req, res);
   if (!entry) return;
 
-  // 日记：一天可以写多篇 —— 永远新建，不合并到已有记录
-  if (entry.category !== 'diary') {
+  // 日记 / 愿望：每条都独立 —— 永远新建，不合并到已有记录
+  if (entry.category !== 'diary' && entry.category !== 'wish') {
     // 同一个时间点（或同一个相册标签）已存在 → 追加，而不是新建
     const { data: existRows, error: findErr } = await supabase
       .from('items')

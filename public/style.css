@@ -1,6 +1,6 @@
 /* ==========================================================
    小站统一样式  ——  清新自然风（墨绿 / 奶油白 / 暖金）
-   页面：index.html（密码门 + 三个分区）、section.html（分区内容）
+   页面：index.html（密码门 + 四个分区）、section.html（分区内容）
    ========================================================== */
 
 :root {
@@ -173,11 +173,11 @@ body.locked { overflow: hidden; }
 }
 .btn-ghost:hover { background: rgba(255, 255, 255, .3); }
 
-/* ---------------- 三个分区卡片 ---------------- */
+/* ---------------- 分区卡片（四个） ---------------- */
 
 .sections {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 1.1rem;
   margin-top: -3.2rem;        /* 卡片微微压在横幅上，更有层次 */
   padding: 0 .6rem;
@@ -200,6 +200,7 @@ body.locked { overflow: hidden; }
 .card:nth-child(1) { animation-delay: .05s; }
 .card:nth-child(2) { animation-delay: .12s; }
 .card:nth-child(3) { animation-delay: .19s; }
+  .card:nth-child(4) { animation-delay: .26s; }
 
 .card:hover { transform: translateY(-7px); box-shadow: var(--shadow-lg); }
 .card:active { transform: translateY(-3px); }
@@ -215,6 +216,7 @@ body.locked { overflow: hidden; }
 .card.c-album .icon { background: #eaf3fb; }
 .card.c-diary .icon { background: #eef5ea; }
 .card.c-time  .icon { background: #fdf3e0; }
+  .card.c-wish  .icon { background: #f6ecfb; }
 
 .card h3 { margin: 0 0 .4rem; font-size: 1.1rem; letter-spacing: .02em; }
 
@@ -644,6 +646,161 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
 .item-top { display: flex; align-items: center; gap: .5rem; }
 .item-top .dot-date { margin: 0; }
 
+/* ---------------- 愿望清单 ----------------
+   未完成按优先级分块（高 → 中 → 低），已完成落到底部并加分隔线
+   -------------------------------------------- */
+
+.wish-block { margin-bottom: 1.35rem; }
+.wish-block:last-child { margin-bottom: 0; }
+
+.wish-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .7rem; }
+.wish-head h2 {
+  margin: 0;
+  display: flex; align-items: center; gap: .55rem;
+  font-size: 1.02rem; letter-spacing: .02em;
+}
+.wish-head h2::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px; height: 17px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #e9c477, #c98b2a);
+}
+.wish-block.p-high .wish-head h2::before { background: linear-gradient(180deg, #f3ab92, #d1654a); }
+.wish-block.p-low  .wish-head h2::before { background: linear-gradient(180deg, #b3d5b3, #6d9e7a); }
+
+.wish-head .num {
+  padding: .1rem .5rem;
+  font-size: .7rem; font-weight: 600; letter-spacing: .04em;
+  color: var(--muted);
+  background: #f2f4f1;
+  border-radius: 999px;
+}
+
+.wishes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: .75rem;
+}
+
+.wish {
+  display: flex; align-items: flex-start; gap: .75rem;
+  padding: .85rem .95rem .9rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: transform .24s cubic-bezier(.2, .8, .2, 1), box-shadow .24s, background .24s;
+  animation: rise .4s ease both;
+}
+.wish:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.wish-body { flex: 1 1 auto; min-width: 0; }
+
+.wish-check {
+  flex: 0 0 auto;
+  width: 26px; height: 26px;
+  margin-top: .12rem; padding: 0;
+  display: grid; place-items: center;
+  font-size: .82rem; line-height: 1;
+  color: transparent;
+  background: #fff;
+  border: 2px solid rgba(47, 93, 63, .22);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, color .2s, transform .16s;
+}
+.wish-check:hover { border-color: var(--green); color: rgba(47, 93, 63, .34); transform: scale(1.08); }
+.wish-check:active { transform: scale(.94); }
+
+.wish-top { display: flex; align-items: center; gap: .5rem; }
+.wish-top .item-actions { margin-left: auto; }
+
+.prio {
+  display: inline-flex; align-items: center; gap: .22rem;
+  padding: .12rem .5rem;
+  font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.prio.p-high { color: #a8452f; background: #fdeee9; }
+.prio.p-mid  { color: #8a6a1c; background: #fdf3e0; }
+.prio.p-low  { color: #3d6b4d; background: #eef5ea; }
+
+.wish-at { font-size: .73rem; color: var(--muted); letter-spacing: .02em; }
+.wish-at.is-done { color: var(--green-deep); font-weight: 600; }
+
+.wish-text {
+  margin: .48rem 0 0;
+  font-size: .95rem; line-height: 1.62;
+  color: var(--body-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 已完成：整条置灰 + 划线 + 绿勾 */
+.wish.done { background: #f8faf7; box-shadow: none; }
+.wish.done .wish-text { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(131, 149, 135, .55); }
+.wish.done .wish-check { background: var(--green); border-color: var(--green); color: #fff; }
+.wish.done:hover { transform: none; }
+
+/* 已完成整块：落到最下面 + 虚线分隔 */
+.wish-block.is-done {
+  margin-top: 2.1rem;
+  padding-top: 1.4rem;
+  border-top: 1px dashed rgba(47, 93, 63, .2);
+}
+.wish-block.is-done .wish-head h2 { color: var(--green-deep); }
+.wish-block.is-done .wish-head h2::before { background: linear-gradient(180deg, #bcd8bd, #7fa885); }
+
+.wish-alldone {
+  margin: 0;
+  padding: .9rem 0 0;
+  text-align: center;
+  font-size: .95rem;
+  color: var(--green-deep);
+}
+
+/* 表单里：优先级三档 + 完成勾选 */
+.prio-pick { display: flex; flex-wrap: wrap; gap: .5rem; }
+.prio-opt { position: relative; display: inline-flex; }
+.prio-opt input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.prio-opt span {
+  display: inline-flex; align-items: center; gap: .32rem;
+  padding: .5rem .95rem;
+  font-size: .87rem;
+  color: var(--body-text);
+  background: #fff;
+  border: 1px solid rgba(47, 93, 63, .2);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, color .2s, box-shadow .2s;
+}
+.prio-opt:hover span { background: #fbfdfa; }
+.prio-opt input:checked + span {
+  color: var(--green-deep);
+  background: var(--green-soft);
+  border-color: var(--green);
+  font-weight: 600;
+  box-shadow: 0 0 0 3px rgba(47, 93, 63, .08);
+}
+.prio-opt.p-high input:checked + span { color: #a8452f; background: #fdeee9; border-color: #d1654a; box-shadow: 0 0 0 3px rgba(209, 101, 74, .1); }
+.prio-opt.p-low  input:checked + span { color: #3d6b4d; background: #eef5ea; border-color: #6d9e7a; box-shadow: 0 0 0 3px rgba(109, 158, 122, .12); }
+
+.check-line {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .55rem .8rem;
+  font-size: .9rem;
+  color: var(--body-text);
+  background: #fbfdfa;
+  border: 1px dashed rgba(47, 93, 63, .22);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.check-line input { width: 18px; height: 18px; accent-color: var(--green); cursor: pointer; }
+
+/* 用 hidden 属性隐藏时，别被上面的 display 覆盖掉 */
+.addpanel [hidden] { display: none !important; }
+
 /* ---------------- 表单：可单独移除的预览图 / 编辑态 ---------------- */
 
 .thumb-wrap { position: relative; width: 74px; height: 74px; }
@@ -715,6 +872,9 @@ textarea.form-input { min-height: 96px; resize: vertical; line-height: 1.6; }
   .group-photos .shot { width: 112px; height: 112px; }
     .group-photos.ph-loading { min-height: 112px; padding: .9rem .8rem; }
   .day-notes { grid-template-columns: 1fr; }
+  .wishes { grid-template-columns: 1fr; }
+  .wish { padding: .8rem .85rem .85rem; }
+  .wish-block.is-done { margin-top: 1.7rem; padding-top: 1.2rem; }
   .lightbox { padding: 1rem; }
   .lightbox .lb-nav { width: 38px; height: 38px; font-size: 1.25rem; }
 }

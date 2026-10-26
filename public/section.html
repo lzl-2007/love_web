@@ -56,6 +56,8 @@
      - 相册：按「说明标签」分块，一组一块，组内图片横排
      - 日记：同一天可以有多篇，各自独立，带作者标签
      - 时光轴：按时间点排列
+     - 愿望清单：带优先级（高/中/低）+ 完成状态；未完成按优先级分块、块内后填的在前；
+                 已完成单独一块放在最下面，按完成时间近的在前
      ============================================================ */
   const KEY = 'view_pwd';        // 查看密码（sessionStorage）
   const AKEY = 'admin_pwd';      // 管理密码（sessionStorage）
@@ -65,7 +67,8 @@
   const SECTIONS = {
     album:    { title: '📷 相片回忆', tip: '选好照片 + 写个说明标签，同一标签的照片会放在同一块里' },
     diary:    { title: '📖 心情日记', tip: '同一天可以写很多篇，每篇都会单独留着' },
-    timeline: { title: '⏳ 时光轴',   tip: '同一个时间点再添加，会并入同一条' }
+    timeline: { title: '⏳ 时光轴',   tip: '同一个时间点再添加，会并入同一条' },
+    wish:     { title: '🌟 愿望清单', tip: '想一起去做的、想一起拥有的，先写下来 —— 想做的排前面，做到了就打个勾' }
   };
   const params = new URLSearchParams(location.search);
   const type = SECTIONS[params.get('type')] ? params.get('type') : 'diary';
@@ -76,8 +79,10 @@
   /* ---------------- 小工具 ---------------- */
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-  const MARK = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
+  const MARK = /^\[(相片|日记|时光轴|愿望)\]\s*(.*)$/;
   const DMARK = /^\[日记\]\s*(\d{4}-\d{2}-\d{2})(?:\s*@\s*(\S+))?\s*$/;
+  // 愿望： [愿望] 高 未完成  /  [愿望] 中 已完成 2026-10-26 19:30
+  const WISH_RE = /^\[愿望\]\s*(高|中|低)\s*(未完成|已完成)(?:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}))?\s*$/;
   const IMG_RE = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
 
   // 取出图片（链接 / data URL）和剩下的正文
@@ -99,9 +104,10 @@
   function parseItem(i) {
     const m = MARK.exec(i.title || '');
     const c = splitContent(i.content);
-    const cat = m ? ({ '相片': 'album', '日记': 'diary', '时光轴': 'timeline' })[m[1]] : null;
+    const cat = m ? ({ '相片': 'album', '日记': 'diary', '时光轴': 'timeline', '愿望': 'wish' })[m[1]] : null;
     const rest = m ? String(m[2] || '').trim() : '';
-    let stamp = '', label = '', author = '';
+    let stamp = '', label = '', author = '', prio = '', doneAt = '';
+    let done = false;
     if (cat === 'album') {
       label = rest || '照片';
     } else if (cat === 'diary') {
@@ -110,9 +116,13 @@
       else { stamp = rest; }            // 老格式：[日记] 2026-07-01（没写作者）
     } else if (cat === 'timeline') {
       stamp = rest;
+    } else if (cat === 'wish') {
+      const wm = WISH_RE.exec(i.title || '');
+      if (wm) { prio = wm[1]; done = wm[2] === '已完成'; doneAt = wm[3] || ''; }
+      else { prio = '中'; }             // 格式万一不对，先当中优先级
     }
     return {
-      id: i.id, category: cat, stamp, label, author,
+      id: i.id, category: cat, stamp, label, author, prio, done, doneAt,
       title: i.title, images: c.images, text: c.text, created_at: i.created_at
     };
   }
@@ -352,6 +362,75 @@
       </div>`).join('') + `</div>`;
   }
 
+  /* ---------------- 愿望清单 ----------------
+     · 未完成：按优先级分块（高 → 中 → 低），块内「后填的在上」
+     · 已完成：单独一块放在最下面，按「确定完成的时间」近的在上
+     · 每条的圆圈可以直接点（改状态和改 / 删一样，需要管理密码）
+     ----------------------------------------------- */
+  const WISH_META = {
+    '高': { ico: '🔥', name: '高优先级', cls: 'p-high' },
+    '中': { ico: '⭐', name: '中优先级', cls: 'p-mid' },
+    '低': { ico: '🌿', name: '低优先级', cls: 'p-low' }
+  };
+  const PRIO_RANK = { '高': 0, '中': 1, '低': 2 };
+  const rankOf = p => (PRIO_RANK[p] === undefined ? 9 : PRIO_RANK[p]);
+  const prioOf = p => (WISH_META[p] ? p : '中');
+
+  function wishItem(it) {
+    const p = prioOf(it.prio);
+    const m = WISH_META[p];
+    const added = fmtDate(it.created_at);
+    return `
+      <article class="wish${it.done ? ' done' : ''}">
+        <button class="wish-check" type="button" data-wish-toggle="${it.id}"
+                title="${it.done ? '点一下改回未完成' : '点一下标记为已完成'}"
+                aria-label="${it.done ? '改回未完成' : '标记为已完成'}">${it.done ? '✓' : ''}</button>
+        <div class="wish-body">
+          <div class="wish-top">
+            <span class="prio ${m.cls}" title="${m.name}">${m.ico} ${esc(p)}</span>
+            ${it.done
+              ? `<span class="wish-at is-done">✅ ${esc(it.doneAt || added || '已完成')} 完成</span>`
+              : `<span class="wish-at">${added ? '添加于 ' + esc(added.slice(5)) : ''}</span>`}
+            ${actionsHTML([it.id])}
+          </div>
+          <p class="wish-text">${esc(it.text || '（这条愿望没写内容）')}</p>
+        </div>
+      </article>`;
+  }
+
+  function wishBlock(ico, name, arr, cls) {
+    if (!arr.length) return '';
+    return `
+      <section class="wish-block${cls ? ' ' + cls : ''}">
+        <div class="wish-head">
+          <h2>${ico} ${esc(name)}<span class="num">${arr.length} 个</span></h2>
+        </div>
+        <div class="wishes">${arr.map(wishItem).join('')}</div>
+      </section>`;
+  }
+
+  function renderWish(items) {
+    const list = items.filter(i => i.category === 'wish');
+    const undone = list.filter(i => !i.done)
+      .sort((a, b) => rankOf(a.prio) - rankOf(b.prio)                                        // 优先级高的在上
+                   || String(b.created_at || '').localeCompare(String(a.created_at || '')));   // 同优先级：后填的在上
+    const doneList = list.filter(i => i.done)
+      .sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))            // 完成时间近的在上
+                   || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+    $('count').textContent = list.length ? `未完成 ${undone.length} · 已完成 ${doneList.length}` : '';
+    if (!list.length) return emptyBox('还没有许下什么愿望', conf.tip);
+
+    let html = '';
+    ['高', '中', '低'].forEach(p => {
+      const arr = undone.filter(i => prioOf(i.prio) === p);
+      if (arr.length) html += wishBlock(WISH_META[p].ico, WISH_META[p].name, arr, WISH_META[p].cls);
+    });
+    if (!undone.length) html += `<p class="wish-alldone">🎉 现在的愿望都做到啦</p>`;
+    html += wishBlock('✅', '已经做到啦', doneList, 'is-done');
+    return html;
+  }
+
   /* ---------------- 图片放大（可左右翻） ---------------- */
   let zoomList = [], zoomIdx = 0;
   function paintZoom() {
@@ -407,6 +486,27 @@
         <label class="lbl">想说的话</label>
         <textarea id="f-content" class="form-input" placeholder="今天想说点什么…"></textarea>`;
     }
+    if (type === 'wish') {
+      return `
+        <label class="lbl">愿望内容</label>
+        <textarea id="f-content" class="form-input" placeholder="想一起去的、想一起做的、想一起拥有的…"></textarea>
+        <label class="lbl">优先级</label>
+        <div class="prio-pick">
+          ${['高', '中', '低'].map(p => `
+            <label class="prio-opt ${WISH_META[p].cls}">
+              <input type="radio" name="prio" value="${p}"${p === '中' ? ' checked' : ''}>
+              <span>${WISH_META[p].ico} ${p}优先级</span>
+            </label>`).join('')}
+        </div>
+        <label class="lbl">进度</label>
+        <label class="check-line">
+          <input type="checkbox" id="f-done"><span>已经完成啦 ✅</span>
+        </label>
+        <div id="f-doneat-box" hidden>
+          <label class="lbl">完成时间</label>
+          <input id="f-doneat" class="form-input" type="datetime-local" value="${nowStr()}">
+        </div>`;
+    }
     return `
       <label class="lbl">时间点</label>
       <input id="f-when" class="form-input" type="datetime-local" value="${nowStr()}">
@@ -438,7 +538,19 @@
     return true;
   }
 
+  // 勾上「已经完成」才显示完成时间
+  function syncDoneAt() {
+    const box = $('f-done'), wrap = $('f-doneat-box');
+    if (!box || !wrap) return;
+    wrap.hidden = !box.checked;
+  }
+
   function bindForm() {
+    if (type === 'wish') {
+      $('f-done').addEventListener('change', syncDoneAt);
+      syncDoneAt();
+      return;
+    }
     if (type !== 'album') return;
     $('f-files').addEventListener('change', async e => {
       const files = Array.from(e.target.files || []);
@@ -511,6 +623,13 @@
       $('f-when').value = it.stamp || ymd(it.created_at) || todayStr();
       $('f-author').value = it.author || localStorage.getItem(LAST_AUTHOR) || '';
       $('f-content').value = it.text || '';
+    } else if (type === 'wish') {
+      $('f-content').value = it.text || '';
+      const radio = document.querySelector(`input[name="prio"][value="${prioOf(it.prio)}"]`);
+      if (radio) radio.checked = true;
+      $('f-done').checked = !!it.done;
+      $('f-doneat').value = (it.doneAt || fmtDate(it.created_at) || nowStr()).replace(' ', 'T');
+      syncDoneAt();
     } else {
       $('f-when').value = (it.stamp || fmtDate(it.created_at) || nowStr()).replace(' ', 'T');
       $('f-content').value = it.text || '';
@@ -542,6 +661,13 @@
       payload.content = $('f-content').value.trim();
       if (!payload.author) return setHint('请填一下作者', true);
       if (!payload.content) return setHint('写点什么再保存吧', true);
+    } else if (type === 'wish') {
+      payload.content = $('f-content').value.trim();
+      const picked = document.querySelector('input[name="prio"]:checked');
+      payload.priority = picked ? picked.value : '中';
+      payload.done = $('f-done').checked;
+      if (payload.done) payload.doneAt = ($('f-doneat').value || '').replace('T', ' ');
+      if (!payload.content) return setHint('先把愿望写下来吧', true);
     } else {
       payload.when = ($('f-when').value || '').replace('T', ' ');
       payload.content = $('f-content').value.trim();
@@ -596,6 +722,53 @@
     }
   }
 
+  /* ================= 愿望：一键标记「已完成 / 未完成」 ================= */
+  let pendingToggle = null;
+
+  async function toggleWish(id) {
+    const it = ITEMS.get(id);
+    if (!it) return;
+    const pwd = sessionStorage.getItem(AKEY) || $('adminPwd').value.trim();
+    if (!pwd) {
+      pendingToggle = id;
+      $('addPanel').hidden = false;
+      $('addBtn').textContent = '收起';
+      $('adminPwd').focus();
+      return setHint('改动愿望需要管理密码：在下面输入一次，会自动继续', true);
+    }
+    const willDo = !it.done;
+    const payload = {
+      category: 'wish',
+      content: it.text || it.title || '（没有内容）',
+      priority: prioOf(it.prio),
+      done: willDo,
+      doneAt: willDo ? fmtDate(new Date()) : ''
+    };
+    try {
+      const r = await fetch('/api/entries/' + id, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-password': pwd,
+          'x-view-password': sessionStorage.getItem(KEY) || ''
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) {
+        if (r.status === 401) { sessionStorage.removeItem(AKEY); return toast('管理密码不对，请重新输入'); }
+        let data = null;
+        try { data = await r.json(); } catch (e) {}
+        return toast('改不动：' + ((data && (data.message || data.error)) || ('HTTP ' + r.status)));
+      }
+      sessionStorage.setItem(AKEY, pwd);
+      setHint('');
+      toast(willDo ? '做到啦，恭喜 🎉' : '已改回未完成');
+      await refresh();
+    } catch (e) {
+      toast('改不动：网络错误');
+    }
+  }
+
   /* ================= 删除 ================= */
   async function delItems(ids) {
     const it = ITEMS.get(ids[0]);
@@ -637,6 +810,8 @@
 
   /* ================= 事件代理 ================= */
   document.addEventListener('click', e => {
+    const tg = e.target.closest('[data-wish-toggle]');
+    if (tg) { toggleWish(Number(tg.dataset.wishToggle)); return; }
     const ld = e.target.closest('[data-load]');
     if (ld) { loadGroup(ld.dataset.load); return; }
     const rm = e.target.closest('[data-rm]');
@@ -712,7 +887,9 @@
     if (!items) return;
     ITEMS = new Map(items.map(i => [i.id, i]));
     loadAuthors(items);
-    $('body').innerHTML = type === 'timeline' ? renderTimeline(items) : renderDiary(items);
+    $('body').innerHTML = type === 'wish' ? renderWish(items)
+      : type === 'timeline' ? renderTimeline(items)
+      : renderDiary(items);
   }
 
   /* ================= 初始化 ================= */
@@ -721,6 +898,7 @@
     const v = $('adminPwd').value.trim();
     if (v) sessionStorage.setItem(AKEY, v);
     if (v && pendingDel) { const ids = pendingDel; pendingDel = null; setHint(''); delItems(ids); }
+    if (v && pendingToggle) { const id = pendingToggle; pendingToggle = null; setHint(''); toggleWish(id); }
   });
   resetForm();
   $('addPanel').hidden = true;

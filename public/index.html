@@ -21,7 +21,7 @@
     </form>
   </div>
 
-  <!-- ================= 解锁后：首页 + 三个分区 ================= -->
+  <!-- ================= 解锁后：首页 + 四个分区 ================= -->
   <div class="wrap" id="home" style="display:none">
     <div class="hero">
       <div class="hero-top">
@@ -60,15 +60,24 @@
           <span class="go">进去看看</span>
         </div>
       </a>
+
+      <a class="card c-wish" href="/section?type=wish">
+        <div class="icon">🌟</div>
+        <div class="card-body">
+          <h3>愿望清单<span class="pill" id="cnt-wish"></span></h3>
+          <p>想一起做的事，一件件写下来，再一件件打勾。</p>
+          <span class="go">进去看看</span>
+        </div>
+      </a>
     </div>
 
-    <!-- 把三个模块的数据打包成一个 .md 存到本地 -->
+    <!-- 把四个模块的数据打包成一个 .md 存到本地 -->
     <div class="export-bar">
       <button class="btn-export" id="exportBtn" type="button">
         <span class="ico">⬇</span><span id="exportBtnTxt">下载全部数据（.md）</span>
       </button>
       <button class="btn-export-alt" id="exportTxtBtn" type="button">只要文字版</button>
-      <p class="export-hint" id="exportHint">把相片、日记、时光轴整理成一份 .md 文件，存到你这台设备上</p>
+      <p class="export-hint" id="exportHint">把相片、日记、时光轴、愿望清单整理成一份 .md 文件，存到你这台设备上</p>
     </div>
 
     <!-- ================= AI 阶段小结 ================= -->
@@ -192,28 +201,33 @@
         const isAlbum = i => /^\[相片\]/.test(i.title || '');
         const isDiary = i => /^\[日记\]/.test(i.title || '');
         const isTime  = i => /^\[时光轴\]/.test(i.title || '');
-        const legacy  = i => !/^\[(相片|日记|时光轴)\]/.test(i.title || '');   // 以前手动加的内容
-        const n = { album: 0, diary: 0, timeline: 0 };
+        const isWish  = i => /^\[愿望\]/.test(i.title || '');
+        const legacy  = i => !/^\[(相片|日记|时光轴|愿望)\]/.test(i.title || '');   // 以前手动加的内容
+        const n = { album: 0, diary: 0, timeline: 0, wish: 0 };
         items.forEach(i => {
           if (isAlbum(i)) n.album++;
           else if (isDiary(i)) { n.diary++; }
           else if (isTime(i)) { n.timeline++; }
+          else if (isWish(i)) { n.wish++; }
           else if (legacy(i)) { n.diary++; n.timeline++; }
         });
         const put = (id, v) => { $(id).textContent = v ? v : ''; };
         put('cnt-album', n.album);
         put('cnt-diary', n.diary);
         put('cnt-time', n.timeline);
+        put('cnt-wish', n.wish);
       } catch (err) {
         console.warn('统计失败：', err.message);
       }
     }
 
-    // ---------- 下载全部数据：把三个模块的内容整理成一个 .md ----------
-    const M_MARK  = /^\[(相片|日记|时光轴)\]\s*(.*)$/;
+    // ---------- 下载全部数据：把四个模块的内容整理成一个 .md ----------
+    const M_MARK  = /^\[(相片|日记|时光轴|愿望)\]\s*(.*)$/;
     const M_DMARK = /^\[日记\]\s*(\d{4}-\d{2}-\d{2})(?:\s*@\s*(\S+))?\s*$/;
+    // [愿望] 高 未完成  /  [愿望] 中 已完成 2026-10-26 19:30
+    const M_WISH  = /^\[愿望\]\s*(高|中|低)\s*(未完成|已完成)(?:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}))?\s*$/;
     const M_IMG   = /(?:https?:\/\/\S+?\.(?:png|jpe?g|gif|webp|avif|svg|bmp)(?:\?\S*)?)|(?:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/gi;
-    const M_CAT   = { '相片': 'album', '日记': 'diary', '时光轴': 'timeline' };
+    const M_CAT   = { '相片': 'album', '日记': 'diary', '时光轴': 'timeline', '愿望': 'wish' };
 
     // 从 content 里挑出图片（data URL / 图片链接）和剩下的正文
     function splitContent(content) {
@@ -245,13 +259,19 @@
       const c = splitContent(i.content);
       const cat = m ? M_CAT[m[1]] : null;              // null = 早期没有标记的记录
       const rest = m ? String(m[2] || '').trim() : '';
-      let stamp = '', label = '', author = '';
+      let stamp = '', label = '', author = '', prio = '', doneAt = '';
+      let wishDone = false;
       if (cat === 'album') label = rest || '照片';
       else if (cat === 'diary') {
         const dm = M_DMARK.exec(i.title || '');
         if (dm) { stamp = dm[1]; author = dm[2] || ''; } else stamp = rest;
       } else if (cat === 'timeline') stamp = rest;
-      return { id: i.id, cat, stamp, label, author, images: c.images, text: c.text, created_at: i.created_at };
+      else if (cat === 'wish') {
+        const wm = M_WISH.exec(i.title || '');
+        if (wm) { prio = wm[1]; wishDone = wm[2] === '已完成'; doneAt = wm[3] || ''; }
+        else prio = '中';
+      }
+      return { id: i.id, cat, stamp, label, author, prio, done: wishDone, doneAt, images: c.images, text: c.text, created_at: i.created_at };
     }
 
     // 正文保留换行（Markdown 行尾加两个空格 = 强制换行）
@@ -283,10 +303,20 @@
       const times = rows.filter(r => r.cat === 'timeline' || r.cat === null)
         .sort((a, b) => stampOf(b).localeCompare(stampOf(a)));
 
+      // ④ 愿望清单：未完成按优先级（高→中→低）+ 同级后填的在前；已完成按完成时间近的在前
+      const W_RANK = { '高': 0, '中': 1, '低': 2 };
+      const wRank = r => (W_RANK[r.prio] === undefined ? 9 : W_RANK[r.prio]);
+      const wishes = rows.filter(r => r.cat === 'wish');
+      const wishUndone = wishes.filter(r => !r.done)
+        .sort((a, b) => wRank(a) - wRank(b) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      const wishDone = wishes.filter(r => r.done)
+        .sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))
+                     || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
       let md = '';
       md += `# 我们的小天地 · 全部数据\n\n`;
       md += `> 导出时间：${stamp}（本机时间）\n`;
-      md += `> 相片 ${albumList.length} 组 / ${albumCount} 张 · 日记 ${diaries.length} 篇 · 时光轴 ${times.length} 条\n`;
+      md += `> 相片 ${albumList.length} 组 / ${albumCount} 张 · 日记 ${diaries.length} 篇 · 时光轴 ${times.length} 条 · 愿望 ${wishes.length} 个（未完成 ${wishUndone.length}）\n`;
       md += withImages
         ? `> 照片已随文字一起内嵌在这个文件里，整份内容可以离线保存。\n`
         : `> 这是**文字版**，照片没有内嵌（想要照片请用「下载全部数据（.md）」）。\n`;
@@ -322,6 +352,25 @@
         md += r.text ? para(r.text) + `\n\n` : `（没有留下文字）\n\n`;
       });
 
+      // ---------------- 愿望清单 ----------------
+      md += `---\n\n## 🌟 愿望清单（共 ${wishes.length} 个 · 未完成 ${wishUndone.length} · 已完成 ${wishDone.length}）\n\n`;
+      if (!wishes.length) md += `（还没有许下愿望）\n\n`;
+      const oneLine = r => String(r.text || '').replace(/\s*\n\s*/g, ' / ').trim() || '（没有内容）';
+      const wishLine = (r, mark, tail) => `- [${mark}] **${r.prio || '中'}** · ${oneLine(r)}  \n      ${tail}\n\n`;
+      if (wishUndone.length) {
+        md += `### 🔥 还没做到的（按优先级：高 → 中 → 低）\n\n`;
+        ['高', '中', '低'].forEach(p => {
+          const arr = wishUndone.filter(r => (r.prio || '中') === p);
+          if (!arr.length) return;
+          md += `**${p}优先级 · ${arr.length} 个**\n\n`;
+          arr.forEach(r => { md += wishLine(r, ' ', '添加于 ' + (fmtTime(r.created_at) || '—')); });
+        });
+      }
+      if (wishDone.length) {
+        md += `### ✅ 已经做到啦（按完成时间，近的在上）\n\n`;
+        wishDone.forEach(r => { md += wishLine(r, 'x', '完成于 ' + (r.doneAt || fmtTime(r.created_at) || '—')); });
+      }
+
       md += `---\n\n*这份文件由「我们的小天地」首页的「下载全部数据」生成 · ${stamp}*\n`;
       return md;
     }
@@ -336,7 +385,7 @@
       const oldTxt = btnTxt.textContent;
       btn.disabled = true; btn2.disabled = true;
       btnTxt.textContent = '打包中…';
-      hint.textContent = '正在把三个模块的内容整理成一份文件…';
+      hint.textContent = '正在把四个模块的内容整理成一份文件…';
       try {
         const items = await getItems(false);      // 要完整内容（含图片）
         if (!items) return;
